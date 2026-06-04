@@ -40,3 +40,7 @@ logs/
 # （host 的 queries/ 和插件包内的 queries/ 都覆盖）
 **/queries/*.sql
 !**/queries/*.example.sql
+
+# 配置片段同理 —— conf.d/ 下只接受 .example.yaml 形式的范本
+conf.d/*.yaml
+!conf.d/*.example.yaml
