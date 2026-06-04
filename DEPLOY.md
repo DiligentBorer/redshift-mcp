@@ -387,7 +387,7 @@ sudo systemctl restart redshift-mcp
 | Python 解释器 | `/var/lib/redshift-mcp/.local/share/uv/python/cpython-3.13.*/` |
 | 配置 | `/etc/redshift-mcp/config.yaml`（0640 root:redshift-mcp） |
 | 配置片段（可选，include 合并） | `/etc/redshift-mcp/conf.d/*.yaml` |
-| 外链 SQL（可选，sql_file） | `/etc/redshift-mcp/queries/*.sql` |
+| 外链 SQL（可选，sql_file） | `/etc/redshift-mcp/queries/*.sql`（仓库内仅 `*.example.sql` 入 git，真实业务 SQL 在此目录自管） |
 | 日志（滚动，5 × 10 MB） | `/var/log/redshift-mcp/redshift-mcp.log*` |
 | systemd unit | `/etc/systemd/system/redshift-mcp.service` |
 | Nginx 站点 | `/etc/nginx/conf.d/redshift-mcp.conf` + `redshift-mcp.proxy.inc` |

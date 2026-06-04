@@ -21,7 +21,7 @@
 - **`query_error_api_by_date(date: str)`** —— `date` 为 `YYYY-MM-DD` 格式，返回
   `{date, count, truncated, rows: [{client_ip, device_count}, ...]}`，按 `device_count` 降序。
   由插件包 `redshift-mcp-error-api`（`plugins/error_api/`）提供，**SQL 内聚在插件包内**
-  `plugins/error_api/src/redshift_mcp_error_api/queries/error_api.sql`（`query.py` 通过
+  `plugins/error_api/src/redshift_mcp_error_api/queries/error_api.example.sql`（`query.py` 通过
   `importlib.resources` 读取），命名占位符 `%(event_date)s` / `%(limit)s`。不受表白名单约束。
   逻辑示意（实际文件里 `LIKE` 模式的字面 `%` 都写成 `%%` 以避开 psycopg3 占位符扫描）：
 
@@ -80,7 +80,7 @@ Authorization: Bearer <server.auth_token>
 
 核心包 `src/redshift_mcp/` 不含任何业务 SQL。扩展工具有**两种机制**：
 
-- **① Python 插件（entry_points）** —— 写代码的全功能插件，独立可安装包，装进同一 venv 即自动发现。**插件私有配置内聚在插件内部**（如自带 `error_api` 的 SQL 在其包内 `queries/error_api.sql`），host `config.yaml` 不承载插件配置。
+- **① Python 插件（entry_points）** —— 写代码的全功能插件，独立可安装包，装进同一 venv 即自动发现。**插件私有配置内聚在插件内部**（如自带 `error_api` 的 SQL 在其包内 `queries/error_api.example.sql`），host `config.yaml` 不承载插件配置。
 - **② 声明式 SQL 工具（零代码）** —— 直接在 `config.yaml` 的 `sql_tools:` 里声明 `{name, description, sql, params}`，启动自动注册成 MCP 工具。适合简单 SQL。
 
 ### 方式一：写一个 Python 插件
@@ -130,7 +130,7 @@ uv pip install dist/redshift_mcp_error_api-*.whl
 sql_tools:
   - name: active_devices_by_day
     description: "查询指定日期某国家的活跃设备数"
-    sql: |                     # 也可换成 sql_file: queries/active_devices.sql
+    sql: |                     # 也可换成 sql_file: queries/active_devices.example.sql
       SELECT country, COUNT(DISTINCT device_id) AS devices
       FROM analytics.events
       WHERE event_date = %(date)s AND country = %(country)s
@@ -155,7 +155,9 @@ include:
   - conf.d/*.yaml     # glob，相对主配置目录
 ```
 
-片段按「列表追加 / 嵌套 dict 深合并 / 标量片段覆盖」并入主配置；片段里的 `sql_tools` 条目可用 `sql_file: ../queries/x.sql`（相对**片段文件**目录）把大 SQL 外链到独立 `.sql`。参考 `conf.d/*.example.yaml` 与 `queries/*.sql`。
+片段按「列表追加 / 嵌套 dict 深合并 / 标量片段覆盖」并入主配置；片段里的 `sql_tools` 条目可用 `sql_file: ../queries/x.sql`（相对**片段文件**目录）把大 SQL 外链到独立 `.sql`。参考 `conf.d/*.example.yaml` 与 `queries/*.example.sql`。
+
+> **命名约定**：仓库自带的范本 SQL 都用 `*.example.sql` 命名（如 `queries/active_devices.example.sql`、插件包内 `queries/error_api.example.sql`）；`.gitignore` 配套规则把不带 `.example.` 的真实业务 SQL 排除在 git 之外，避免误提交。
 
 ## 用 MCP Inspector 调试
 

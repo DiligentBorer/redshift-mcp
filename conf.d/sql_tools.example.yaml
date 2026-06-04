@@ -4,8 +4,8 @@
 sql_tools:
   - name: active_devices_by_day
     description: "查询指定日期某国家的活跃设备数"
-    # sql_file 相对本片段文件所在目录（conf.d/）解析；这里指向 ../queries/active_devices.sql
-    sql_file: ../queries/active_devices.sql
+    # sql_file 相对本片段文件所在目录（conf.d/）解析；这里指向 ../queries/active_devices.example.sql
+    sql_file: ../queries/active_devices.example.sql
     params:
       - {name: date, type: date, format: "%Y-%m-%d", description: "US 时区日期"}
       - {name: country, type: enum, enum: ["US", "CA", "UK"], description: "国家码"}
