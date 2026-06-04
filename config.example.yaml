@@ -1,0 +1,83 @@
+# Redshift MCP Server 配置示例。
+# 把本文件拷贝为 config.yaml 并填入实际值；config.yaml 已被 gitignore。
+
+database:
+  # 使用只读 Redshift 账号。
+  host: your-cluster.xxxxxx.us-east-1.redshift.amazonaws.com
+  port: 5439
+  dbname: dev
+  user: readonly_user
+  password: ""
+  sslmode: require        # Redshift 建议设为 require
+  pool_min_size: 1
+  pool_max_size: 5
+  connect_timeout: 10
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  path: /redshift         # Streamable HTTP 端点路径
+  # 静态 Bearer Token。客户端必须携带: Authorization: Bearer <auth_token>
+  # 生产环境替换为一串足够长的随机字符串。
+  auth_token: "change-me-to-a-long-random-string"
+
+query:
+  statement_timeout_ms: 60000   # 单条 SQL 超时（毫秒）；约为实测典型值 15s 的 4 倍
+  max_rows: 10000               # 结果行数截断阈值
+
+plugins:
+  # 插件以独立可安装包形式分发：在自己的 pyproject.toml 里声明
+  #   [project.entry-points."redshift_mcp.plugins"]
+  #   <name> = "<import_pkg>:register"
+  # 装进与本 server 同一个 venv 后，启动时自动被发现并注册工具 —— 没有「插件目录」。
+  enabled: true                 # false => 整体跳过插件加载
+  # 已安装但想临时不启用的插件名列表（按 entry-point name 匹配）。
+  # 例: disabled: ["error_api"]
+  disabled: []
+
+logging:
+  level: INFO                   # DEBUG | INFO | WARNING | ERROR | CRITICAL
+  # 滚动日志文件路径。注释掉本行（或设为 null / ""）则只输出到 stderr。
+  # 父目录会自动创建。
+  file: ./logs/redshift-mcp.log
+  max_bytes: 10485760           # 10 MB
+  backup_count: 5               # 保留这么多份历史文件
+  as_json: false                # true => 输出 JSON 行格式（而非文本格式）
+
+  # ---- SQL 审计通道（run_sql 的完整 SQL 文本）----
+  # 与上面的 level 正交，专门控制是否把每条 run_sql 的 SQL 文本落盘。
+  #   WARNING（默认）→ 不输出 SQL 文本（防 WHERE 子句里的 PII 进日志）
+  #   INFO           → 输出每条 run_sql 的完整 SQL（成功 + 失败）
+  #   DEBUG          → 同 INFO（预留未来加更详细诊断的余地）
+  # 只改这一项不会影响 uvicorn / mcp 等其它 logger 的输出量。
+  sql_audit_level: WARNING
+  # SQL 审计独立文件路径。
+  #   null / ""    → 合流：audit 与运行日志共用 stderr + file（受 sql_audit_level 控制是否输出）
+  #   非空路径     → 独立：audit 写到这里独立的 RotatingFileHandler，
+  #                  与运行日志物理分离，便于做单独的 retention / 加密 / SIEM 接入
+  sql_audit_file: null
+  # 示例（独立模式）：
+  # sql_audit_file: ./logs/sql-audit.log
+
+# 通用查询能力的表白名单。每一项必须 schema-qualified（schema.table）。
+# 留空 list 即等于禁用 list_tables / describe_table / run_sql 三个工具
+# （它们仍然注册，但所有调用都会被白名单拒绝）。
+#
+# 列说明（columns 下面的子项）是可选的：列名/类型/位置由 SVV_COLUMNS 动态
+# 拉取，本配置里的 description / example_values 会叠加进 describe_table
+# 返回的列对象，作为给 LLM 客户端的额外提示。
+tables: []
+# 示例:
+# tables:
+#   - name: dwd.t_action_info_widen
+#     description: "用户行为流水宽表（ip / 设备 / 来源 / 国家 / 日期）"
+#     columns:
+#       ip:
+#         description: "客户端 IP"
+#         example_values: ["1.2.3.4"]
+#       us_day:
+#         description: "US 时区日期，YYYY-MM-DD"
+#         example_values: ["2026-05-20"]
+#   - name: dwd.t_user_info
+#     description: "用户主数据表"
+#     # 不写 columns 也可以；schema 全部由 DB 动态拉取

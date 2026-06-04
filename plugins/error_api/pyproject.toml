@@ -1,0 +1,26 @@
+[project]
+name = "redshift-mcp-error-api"
+version = "0.1.0"
+description = "redshift-mcp 插件：Error API IP 命中统计（业务预设查询）"
+readme = "README.md"
+requires-python = ">=3.10"
+# 依赖宿主主程序，用于 import PluginContext 类型；workspace 下走本地源（见下）。
+dependencies = [
+    "redshift-mcp",
+]
+
+# 关键：声明 entry-point，让主程序通过 importlib.metadata 自动发现本插件。
+# 值 "<import_pkg>:register" 直接指向 register 函数。
+[project.entry-points."redshift_mcp.plugins"]
+error_api = "redshift_mcp_error_api:register"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/redshift_mcp_error_api"]
+
+# 在 uv workspace（monorepo）下，把对宿主的依赖指向本地源而非 PyPI。
+[tool.uv.sources]
+redshift-mcp = { workspace = true }

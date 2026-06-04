@@ -1,0 +1,44 @@
+[project]
+name = "redshift-mcp"
+version = "0.2.0"
+description = "MCP Server（可流式 HTTP） 查询 Amazon Redshift 查询 Error API IP 统计信息"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.2.0",
+    "psycopg[binary,pool]>=3.2.0",
+    "pyyaml>=6.0.1",
+    "pydantic>=2.6.0",
+    "sqlglot>=25.0,<27",
+]
+
+[project.scripts]
+redshift-mcp = "redshift_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/redshift_mcp"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",   # required by starlette.testclient
+    # 自带 Demo 插件：随 uv sync 一并 editable 安装，使其 entry-point 在开发期生效
+    "redshift-mcp-error-api",
+]
+
+# uv workspace（monorepo）：plugins/ 下每个目录都是一个 workspace 成员包
+[tool.uv.workspace]
+members = ["plugins/*"]
+
+# 把对自带插件的 dev 依赖指向本地 workspace 成员，而非 PyPI
+[tool.uv.sources]
+redshift-mcp-error-api = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "plugins/error_api/tests"]
+asyncio_mode = "auto"
