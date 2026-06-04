@@ -35,3 +35,8 @@ logs/
 
 # Claude Code project-scoped state (per-user)
 .claude/
+
+# 业务 SQL 不进 git —— 仓库里只接受 .example.sql 形式的范本文件
+# （host 的 queries/ 和插件包内的 queries/ 都覆盖）
+**/queries/*.sql
+!**/queries/*.example.sql

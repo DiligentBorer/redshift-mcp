@@ -35,7 +35,7 @@ plugins:
   # 例: disabled: ["error_api"]
   disabled: []
   # 注：插件的私有配置内聚在各插件内部，本 host 配置不承载（例如 error_api 的 SQL
-  # 在其包内的 queries/error_api.sql）。这里只有「加载开关」，没有 plugins.config。
+  # 在其包内的 queries/error_api.example.sql）。这里只有「加载开关」，没有 plugins.config。
 
 logging:
   level: INFO                   # DEBUG | INFO | WARNING | ERROR | CRITICAL
@@ -99,7 +99,7 @@ sql_tools: []
 # sql_tools:
 #   - name: active_devices_by_day
 #     description: "查询指定日期某国家的活跃设备数"
-#     sql: |                     # 也可换成 sql_file: queries/active_devices.sql
+#     sql: |                     # 也可换成 sql_file: queries/active_devices.example.sql
 #       SELECT country, COUNT(DISTINCT device_id) AS devices
 #       FROM analytics.events
 #       WHERE event_date = %(date)s AND country = %(country)s

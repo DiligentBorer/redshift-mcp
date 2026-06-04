@@ -1,4 +1,4 @@
-"""error_api 包内 SQL 的回归测试（SQL 现内聚在 queries/error_api.sql，importlib.resources 读取）。
+"""error_api 包内 SQL 的回归测试（SQL 现内聚在 queries/error_api.example.sql，importlib.resources 读取）。
 
 守护两件事：
 1. SQL 资源能被读到（防打成 wheel 时漏掉 .sql）。
@@ -14,9 +14,9 @@ from redshift_mcp_error_api.query import SQL
 
 
 def test_sql_resource_loadable() -> None:
-    """importlib.resources 能读到包内 .sql（防打包漏文件）。"""
+    """importlib.resources 能读到包内 .example.sql（防打包漏文件）。"""
     res = importlib.resources.files("redshift_mcp_error_api").joinpath(
-        "queries", "error_api.sql"
+        "queries", "error_api.example.sql"
     )
     assert res.read_text(encoding="utf-8").strip()
 
