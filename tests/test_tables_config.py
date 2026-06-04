@@ -16,8 +16,8 @@ from redshift_mcp.config import (
 
 
 def test_tablespec_name_normalized_to_lower() -> None:
-    t = TableSpec(name="Dwd.T_Action_Info")
-    assert t.name == "dwd.t_action_info"
+    t = TableSpec(name="Analytics.Events")
+    assert t.name == "analytics.events"
 
 
 def test_tablespec_name_without_schema_rejected() -> None:
@@ -27,7 +27,7 @@ def test_tablespec_name_without_schema_rejected() -> None:
 
 def test_tablespec_name_too_many_dots_rejected() -> None:
     with pytest.raises(ValidationError, match="schema.table"):
-        TableSpec(name="db.dwd.t_x")
+        TableSpec(name="db.analytics.t_x")
 
 
 def test_tablespec_name_starts_with_dot_rejected() -> None:
@@ -37,21 +37,21 @@ def test_tablespec_name_starts_with_dot_rejected() -> None:
 
 def test_tablespec_name_ends_with_dot_rejected() -> None:
     with pytest.raises(ValidationError, match="schema.table"):
-        TableSpec(name="dwd.")
+        TableSpec(name="analytics.")
 
 
 def test_tablespec_with_columns() -> None:
     t = TableSpec(
-        name="dwd.t_x",
+        name="analytics.t_x",
         description="测试表",
         columns={
             "ip": ColumnSpec(description="IP 地址", example_values=["1.2.3.4"]),
-            "us_day": ColumnSpec(description="日期"),
+            "event_date": ColumnSpec(description="日期"),
         },
     )
     assert t.columns["ip"].example_values == ["1.2.3.4"]
-    assert t.columns["us_day"].description == "日期"
-    assert t.columns["us_day"].example_values is None
+    assert t.columns["event_date"].description == "日期"
+    assert t.columns["event_date"].example_values is None
 
 
 def test_appconfig_tables_default_empty() -> None:
@@ -68,11 +68,11 @@ def test_appconfig_allowed_table_names() -> None:
         "database": {"host": "h", "dbname": "d", "user": "u"},
         "server": {"auth_token": "t"},
         "tables": [
-            {"name": "DWD.t_a"},
-            {"name": "Dws.t_b"},
+            {"name": "ANALYTICS.t_a"},
+            {"name": "Core.t_b"},
         ],
     })
-    assert cfg.allowed_table_names() == {"dwd.t_a", "dws.t_b"}
+    assert cfg.allowed_table_names() == {"analytics.t_a", "core.t_b"}
 
 
 def test_appconfig_allowed_table_names_cached(monkeypatch) -> None:
@@ -80,13 +80,13 @@ def test_appconfig_allowed_table_names_cached(monkeypatch) -> None:
     cfg = AppConfig.model_validate({
         "database": {"host": "h", "dbname": "d", "user": "u"},
         "server": {"auth_token": "t"},
-        "tables": [{"name": "dwd.t_a"}, {"name": "dwd.t_b"}],
+        "tables": [{"name": "analytics.t_a"}, {"name": "analytics.t_b"}],
     })
     first = cfg.allowed_table_names_set
     second = cfg.allowed_table_names_set
     # cached_property 的标志：两次访问返回**同一个对象**
     assert first is second
-    assert first == frozenset({"dwd.t_a", "dwd.t_b"})
+    assert first == frozenset({"analytics.t_a", "analytics.t_b"})
 
 
 def test_load_config_with_tables(tmp_path: Path) -> None:
@@ -99,7 +99,7 @@ def test_load_config_with_tables(tmp_path: Path) -> None:
         server:
           auth_token: t
         tables:
-          - name: dwd.t_action_info_widen
+          - name: analytics.events
             description: "用户行为流水"
             columns:
               ip:
@@ -113,6 +113,6 @@ def test_load_config_with_tables(tmp_path: Path) -> None:
 
     assert len(cfg.tables) == 1
     t = cfg.tables[0]
-    assert t.name == "dwd.t_action_info_widen"
+    assert t.name == "analytics.events"
     assert t.description == "用户行为流水"
     assert t.columns["ip"].example_values == ["1.2.3.4"]

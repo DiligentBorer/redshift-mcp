@@ -188,7 +188,7 @@ def query_sql(sql: str, *, max_rows: int) -> dict[str, Any]:
 
 def execute(
     sql: str,
-    params: tuple[Any, ...] | None = None,
+    params: tuple[Any, ...] | dict[str, Any] | None = None,
     *,
     max_rows: int,
 ) -> dict[str, Any]:

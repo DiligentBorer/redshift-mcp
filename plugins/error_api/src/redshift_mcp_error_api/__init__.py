@@ -34,7 +34,7 @@ def register(ctx: PluginContext) -> None:
               - date: 入参日期
               - count: 返回行数
               - truncated: 是否达到 max_rows 上限
-              - rows: {ip, dknumbers} 列表，按 dknumbers 降序
+              - rows: {client_ip, device_count} 列表，按 device_count 降序
         """
         try:
             datetime.strptime(date, "%Y-%m-%d")

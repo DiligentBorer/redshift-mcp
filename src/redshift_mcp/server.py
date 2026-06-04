@@ -27,6 +27,7 @@ from .config import AppConfig, LoggingConfig, load_config
 # 内部断言等）—— 让那些 bug 类异常原样冒泡，由 FastMCP 包成 500，便于早暴露。
 from .errors import DB_RUNTIME_ERRORS as _DB_RUNTIME_ERRORS
 from .plugin import PluginContext, load_plugins
+from .sql_tools import register_sql_tools
 
 logger = logging.getLogger("redshift_mcp")
 # SQL 审计专用子 logger（见 db.py 顶部说明）。失败路径也走它，让"失败的 SQL"
@@ -231,7 +232,7 @@ def describe_table(table: str) -> dict[str, Any]:
     """查指定表的列、类型与可选补充说明。
 
     入参 ``table`` 必须是 schema-qualified 全名（如
-    ``dwd.t_action_info_widen``），且必须先在 ``list_tables`` 返回的
+    ``analytics.events``），且必须先在 ``list_tables`` 返回的
     白名单中出现，否则拒绝。
 
     列信息从 Redshift ``SVV_COLUMNS`` 实时拉取，并叠加 config 里同名列
@@ -454,22 +455,24 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     atexit.register(db.close_pool)
 
-    # 3.5) 加载外部插件（entry_points 发现）。放在 streamable_http_app() 之前，
-    # 但 FastMCP 的 list_tools 是实时读取、不快照，这里注册的工具下一次 list_tools
-    # 请求即可见。坏插件被加载器隔离，不影响 server 启动。
+    # 3.5) 注册扩展工具：① entry_points Python 插件；② 声明式 SQL 工具（config.sql_tools）。
+    # 都放在 streamable_http_app() 之前，但 FastMCP 的 list_tools 实时读取、不快照，
+    # 此时注册的工具下一次 list_tools 即可见。坏插件 / 坏声明被各自隔离，不影响 server 启动。
+    plugin_ctx = PluginContext(
+        mcp=mcp,
+        config=_cfg,
+        logger=logger,
+        sql_audit_logger=sql_audit_logger,
+        request_id_var=request_id_var,
+        get_pool=db.get_pool,
+    )
     if _cfg.plugins.enabled:
-        plugin_ctx = PluginContext(
-            mcp=mcp,
-            config=_cfg,
-            logger=logger,
-            sql_audit_logger=sql_audit_logger,
-            request_id_var=request_id_var,
-            get_pool=db.get_pool,
-        )
         loaded = load_plugins(plugin_ctx, disabled=_cfg.plugins.disabled)
         logger.info("插件注册完成: %s", loaded or "(无)")
     else:
         logger.info("插件加载已禁用 (plugins.enabled=false)")
+    sql_tools = register_sql_tools(plugin_ctx)
+    logger.info("声明式 SQL 工具: %s", sql_tools or "(无)")
 
     # 4) 构建 ASGI app 并挂中间件（rid 在外层、auth 在内层）。
     # Starlette 里**最后 add_middleware 的处于最外层**，因此顺序很关键：

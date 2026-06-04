@@ -26,7 +26,7 @@ uv sync
 uv run redshift-mcp --config config.yaml
 # 或:  uv run python -m redshift_mcp --config config.yaml
 
-# 跑完整测试套件（123 个用例，全部离线，无需真实 Redshift；
+# 跑完整测试套件（158 个用例，全部离线，无需真实 Redshift；
 # 含核心框架测试 tests/ + 插件自带测试 plugins/error_api/tests/）
 uv run pytest -q
 
@@ -56,13 +56,15 @@ errors.py (DB_RUNTIME_ERRORS 共享异常元组；零依赖叶子，防循环依
    ↓
 db.py (psycopg 连接池 + get_pool / execute / query_sql / fetch_table_columns / fetch_table_info)
    ↑
-sql_guard.py (sqlglot AST 校验 + apply_row_cap LIMIT 改写)
+sql_guard.py (assert_read_only 只读校验 + validate_select_only 叠加白名单 + apply_row_cap)
    ↓
 plugin.py (PluginContext 宿主→插件契约 + load_plugins 的 entry_points 加载器)
    ↓
-server.py (FastMCP + 中间件 + 3 个通用 @mcp.tool + main() 里 load_plugins)
+sql_tools.py (register_sql_tools：读 config.sql_tools，safe 时过只读闸门，动态构造签名注册)
    ↓
-plugins/error_api/ (独立可安装包 redshift-mcp-error-api，经 entry_points 注册业务工具)
+server.py (FastMCP + 中间件 + 3 个通用 @mcp.tool + main() 里 load_plugins + register_sql_tools)
+   ↓
+plugins/error_api/ (独立可安装包 redshift-mcp-error-api，SQL 内聚在包内 queries/error_api.sql)
 ```
 
 只有 `server.py` 的 `main()` 把所有东西串起来：`load_plugins` 在 `db.init_pool()` 之后、`mcp.streamable_http_app()` 之前运行（FastMCP 的 list_tools 实时读取、不快照，所以此时注册的插件工具下一次 list_tools 即可见）。`db.py` / `config.py` / `sql_guard.py` / `errors.py` / `plugin.py` 对 MCP 业务一无所知。`sql_guard.py` 完全无副作用（不连 DB），只做 AST 解析 / 校验 / 改写，便于单测全离线。
@@ -129,7 +131,7 @@ plugins/error_api/ (独立可安装包 redshift-mcp-error-api，经 entry_points
 
 1. **`psycopg._encodings.py_codecs[b"UNICODE"] = "utf-8"`** 位于 `db.py` 顶部。Redshift 把 `client_encoding` 报成 PG 7.x 遗留的名字 `UNICODE`，psycopg3 的 codec 表不认识 —— 没有这条 monkey-patch，任何借出的连接**第一次** `cur.execute()` 都会抛 `NotSupportedError: codec not available in Python: 'UNICODE'`。
 
-2. **`SQL_TEMPLATE` 里 LIKE 模式中的 `%%`（双百分号）转义**（该 SQL 已随 `query_error_api_by_date` 迁到插件 `plugins/error_api/src/redshift_mcp_error_api/query.py`）。因为 SQL 是通过 `cur.execute(SQL_TEMPLATE, (params,))` 调用的，psycopg3 会扫描 `%X` 当作占位符。一个字面量 `%localhost%` 会被读成 `%l`（非法占位符），psycopg3 抛 `ProgrammingError: only '%s', '%b', '%t' are allowed as placeholders`。`plugins/error_api/tests/test_sql_template.py` 就是这条坑的回归守护。任何新插件写 LIKE 模式时同样要注意。
+2. **LIKE 模式中的 `%%`（双百分号）转义**。error_api 的 SQL 现内聚在包内 `plugins/error_api/src/redshift_mcp_error_api/queries/error_api.sql`（命名占位符 `%(event_date)s` / `%(limit)s`，由 `importlib.resources` 读取）。因为 SQL 通过 `cur.execute(sql, {...})` 调用，psycopg3 会扫描 `%X` 当作占位符 —— 字面量 `%localhost%` 会被读成 `%l`（非法占位符），psycopg3 抛 `ProgrammingError: only '%s', '%b', '%t' are allowed as placeholders`。`plugins/error_api/tests/test_sql_template.py` 守护这条坑（连 .sql 注释里都不能出现裸 `%`）。**声明式 SQL 工具（`sql_tools`）的 SQL 同样经 `cur.execute(sql, {...})` 跑，LIKE 字面 `%` 也必须写成 `%%`**。
 
 3. **`statement_timeout` 在建连时设置**，不是每次查询时设。`db.init_pool` 把 `options=f"-c statement_timeout={ms}"` 传给 `psycopg.conninfo.make_conninfo`。之前的设计是每次调用都 `cur.execute("SET ...")`，但这种方式在某些 Redshift WLM 队列下不稳定；不要恢复回去。
 
@@ -142,6 +144,7 @@ plugins/error_api/ (独立可安装包 redshift-mcp-error-api，经 entry_points
 ## 配置层细节
 
 - pydantic 模型全部住在 `config.py`。实际配置由 `load_config(path)` 加载，没传 path 时会读 `REDSHIFT_MCP_CONFIG` 环境变量。
+- **`load_config` 支持配置拆分**：顶层 `include: [glob, ...]`（**仅主配置生效，不支持嵌套**；glob 相对主配置目录、结果排序保证确定性）把片段文件按 `_deep_merge`「list 追加 / 嵌套 dict 深合并 / 标量片段覆盖」并入；`sql_tools` 条目（及主配置）的 `sql_file: x.sql` 在读取阶段就地内联成 `sql`（相对**声明它的那个文件**目录，`sql`/`sql_file` 并存或文件缺失都在此报中文错）。最终仍产出单个 `AppConfig`，对下游透明。**插件私有配置不走这里**（内聚在插件内）。
 - `LoggingConfig.as_json` 字段名故意不叫 `json`，是为了避开 pydantic v2 `BaseModel.json()` 这个已废弃方法名冲突触发的 import 期警告。
 - `LoggingConfig.file` 接受 `None` / `""` / 纯空白，全部归一为 `None`（即 stderr-only 模式）。归一逻辑在一个 `@field_validator(mode="before")` 里。
 - `ServerConfig.auth_token` 必须是非空字符串；`ServerConfig.path` 必须以 `/` 开头。两者都有 validator 强约束并有测试覆盖。
@@ -177,15 +180,26 @@ plugins/error_api/ (独立可安装包 redshift-mcp-error-api，经 entry_points
 
 新增一张允许查询的表：仅改 `config.yaml` 的 `tables:` 段，加 `- name: schema.table` 即可，**不需要改代码**。要给 LLM 额外提示该表的列含义，可在 `columns:` 下加 `description` / `example_values`。
 
-## 插件系统（entry_points 安装式）
+## 插件系统（两种机制）
 
-业务工具不写在核心包里，而是以**独立可安装包**形式分发，通过 Python entry_points 自动发现。核心包 `src/redshift_mcp/` 因此不含任何业务 SQL。
+核心包 `src/redshift_mcp/` 不含任何业务 SQL。扩展工具有**两种机制**并存：① **Python 插件**（entry_points 安装式，写代码）；② **声明式 SQL 工具**（`config.sql_tools`，零代码）。
 
-### 三个关键文件
+**插件配置内聚原则**：Python 插件的私有配置**内聚在插件内部**，host `config.yaml` **不承载**插件私有配置（不存在 `plugins.config` 透传、`PluginContext` 没有 `get_plugin_config`）。`error_api` 的 SQL 就放在其包内 `queries/error_api.sql`、由 `importlib.resources` 读取——改 SQL = 改插件包内文件（生产重打包该插件 wheel）。`config.plugins` 只有加载开关（`enabled` / `disabled`）。
+
+### 机制一：Python 插件 —— 三个关键文件
 
 - **`errors.py`** —— 只放 `DB_RUNTIME_ERRORS` 元组的零依赖叶子模块。插件要复用同一组「DB/运行时错误」分类，但不能 import `server.py`（会形成 server → plugin → 插件 → server 循环），所以提到这里；`server.py` 自己也从这里 import（`as _DB_RUNTIME_ERRORS`）。
 - **`plugin.py`** —— 定义 `PluginContext`（宿主→插件契约）和 `load_plugins(ctx, *, disabled)`。加载器用 `importlib.metadata.entry_points(group="redshift_mcp.plugins")` 发现插件，**不扫描目录、不碰 `sys.path`**；每个插件的 import / 取 register / 调 register 三步各自 try/except 隔离，坏插件只记日志跳过，绝不搞崩 server。
-- **`plugins/error_api/`** —— 自带的参考 Demo 插件包（distribution 名 `redshift-mcp-error-api`，import 包名 `redshift_mcp_error_api`），把原来的 `query_error_api_by_date` 业务工具 + `SQL_TEMPLATE` 完整搬了过来。
+- **`plugins/error_api/`** —— 自带的参考 Demo 插件包（distribution 名 `redshift-mcp-error-api`，import 包名 `redshift_mcp_error_api`）。SQL 内聚在包内 `queries/error_api.sql`（命名占位符 `%(event_date)s`/`%(limit)s`），`query.py` 用 `importlib.resources` 读取；`.sql` 是 package data，hatchling 默认打进 wheel（动了打包配置要 `unzip -l` 验证）。
+
+### 机制二：声明式 SQL 工具（`sql_tools.py`）
+
+`register_sql_tools(ctx)` 读 `config.sql_tools`，为每条声明**动态构造一个带正确 `__signature__` + `__annotations__` 的函数**再 `mcp.add_tool` —— FastMCP 据签名推断 inputSchema（`str`→string、`int`→integer、`typing.Literal[*enum]`→enum、`Annotated[T, Field(description=...)]`→带描述）。**FastMCP 调用前用 pydantic 按 schema 校验入参**，所以工具体只需补 `date` 的 `strptime` 格式校验；执行走 `db.execute(sql, bind_dict, max_rows=...)`（命名占位符）。
+
+- **安全闸门**：`SqlToolSpec.safe` 默认 `True` —— 注册时把 SQL（`%(name)s` 占位符先用正则替换成字面量 `1`，否则 sqlglot 解析不了）过 `sql_guard.assert_read_only`，要求单条只读查询；不通过则**跳过该工具 + 记 error**（不搞崩 server）。`safe: false` 关闭。闸门**只校验只读、不强制白名单、不自动加 LIMIT**（运维须自带 LIMIT）。
+- `sql_guard.assert_read_only(sql)` 是从 `validate_select_only` 抽出的只读校验（无白名单），run_sql 与 sql_tools 共用。
+- 重名保护：注册前查 `_tool_manager._tools`，与核心三件套/插件工具/先前声明式工具撞名 → warn 跳过、不覆盖。
+- 参数名/工具名必须是合法标识符且不以 `_` 开头（pydantic validator 拦截）；required 参数自动排前以满足 `Signature`。
 
 ### 插件契约
 
@@ -204,8 +218,8 @@ plugins/error_api/ (独立可安装包 redshift-mcp-error-api，经 entry_points
 
 ### 关键约束 / 易踩的坑
 
-- `load_plugins` 在 `server.main()` 里 `db.init_pool()` 之后、`mcp.streamable_http_app()` 之前调用。FastMCP 的 `list_tools` 实时读 `_tool_manager._tools`、不快照，所以此时注册的插件工具下一次 list_tools 即可见。
-- **冒烟命令只显示 3 个通用工具**：`uv run python -c "from redshift_mcp.server import mcp; ..."` 在 import 期不跑 `main()`，插件未注册。验证插件用 `uv run pytest plugins/error_api/tests/` 或实启后调 list_tools。
+- `load_plugins` 与 `register_sql_tools` 都在 `server.main()` 里 `db.init_pool()` 之后、`mcp.streamable_http_app()` 之前调用（共用一个无条件构造的 `plugin_ctx`；声明式工具独立于 `plugins.enabled` 开关）。FastMCP 的 `list_tools` 实时读 `_tool_manager._tools`、不快照，所以此时注册的工具下一次 list_tools 即可见。
+- **冒烟命令只显示 3 个通用工具**：`uv run python -c "from redshift_mcp.server import mcp; ..."` 在 import 期不跑 `main()`，插件工具与声明式 SQL 工具都未注册。验证用 `uv run pytest` 或实启后调 list_tools。
 - 插件与主程序**共享同一 venv**：插件能自带第三方依赖，但版本冲突会在安装期暴露。
 - 插件日志统一用 `ctx.logger.getChild("<name>")`（即 `redshift_mcp.plugins.<name>`），自动冒泡到主 handler，无需单独配。
 - 插件工具的错误处理沿用核心约定：DB 异常用 `ctx.db_runtime_errors` 收窄 catch、包成带 rid 的 `RuntimeError`；入参错误（如日期格式）抛裸 `ValueError`、不带 rid。

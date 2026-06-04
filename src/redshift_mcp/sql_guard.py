@@ -36,15 +36,14 @@ _FORBIDDEN_TOPLEVEL: tuple[type[exp.Expression], ...] = (
 )
 
 
-def validate_select_only(sql: str, allowed_tables: set[str]) -> exp.Expression:
-    """对外唯一入口：校验通过返回 AST，违规抛 ``ValueError``。
+def assert_read_only(sql: str) -> exp.Expression:
+    """校验 ``sql`` 是**单条只读查询**（不含白名单约束），通过返回顶层 AST。
 
-    Args:
-        sql: 待校验的 SQL 字符串。
-        allowed_tables: 归一化后的白名单全限定表名集合（小写 ``schema.table``）。
+    解析 + 单条 + 拒 DML/DDL/SET/SHOW 等命令式 + 必须 ``exp.Query``（含 Select /
+    Union / Intersect / Except）+ 拒任何 ``SELECT INTO``。违规抛 ``ValueError``。
 
-    Returns:
-        sqlglot Expression 顶层节点（必为 ``Select``）。
+    供两处复用：``validate_select_only``（run_sql，叠加白名单）与声明式 SQL 工具的
+    安全闸门（``sql_tools``，仅需「只读」校验、不约束表）。
     """
     if not isinstance(sql, str) or not sql.strip():
         raise ValueError("SQL 不能为空")
@@ -81,6 +80,23 @@ def validate_select_only(sql: str, allowed_tables: set[str]) -> exp.Expression:
         raise ValueError(
             "不允许 SELECT INTO（含 INTO TEMP）；只支持纯查询的 SELECT"
         )
+
+    return ast
+
+
+def validate_select_only(sql: str, allowed_tables: set[str]) -> exp.Expression:
+    """对外唯一入口：校验通过返回 AST，违规抛 ``ValueError``。
+
+    在 ``assert_read_only``（单条只读查询）基础上，再强制所有引用表全限定且在白名单内。
+
+    Args:
+        sql: 待校验的 SQL 字符串。
+        allowed_tables: 归一化后的白名单全限定表名集合（小写 ``schema.table``）。
+
+    Returns:
+        sqlglot Expression 顶层节点（必为 ``Select``）。
+    """
+    ast = assert_read_only(sql)
 
     # 收集 CTE 别名（in-query 局部命名空间，不参与白名单校验）
     cte_aliases: set[str] = set()

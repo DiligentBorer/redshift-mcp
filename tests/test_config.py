@@ -13,8 +13,43 @@ from redshift_mcp.config import (
     DatabaseConfig,
     LoggingConfig,
     ServerConfig,
+    SqlToolParam,
+    SqlToolSpec,
     load_config,
 )
+
+
+# ===== 声明式 SQL 工具 schema 校验 =====
+
+
+def test_sql_tool_param_defaults() -> None:
+    p = SqlToolParam(name="date")
+    assert p.type == "string" and p.required is True
+
+
+def test_sql_tool_param_name_must_be_identifier() -> None:
+    with pytest.raises(ValidationError):
+        SqlToolParam(name="not ok")
+    with pytest.raises(ValidationError):
+        SqlToolParam(name="_leading")   # 不以 _ 开头（FastMCP 限制）
+
+
+def test_sql_tool_param_enum_requires_values() -> None:
+    with pytest.raises(ValidationError):
+        SqlToolParam(name="kind", type="enum")          # 缺 enum
+    SqlToolParam(name="kind", type="enum", enum=["a"])  # ok
+
+
+def test_sql_tool_spec_defaults_safe_true() -> None:
+    spec = SqlToolSpec(name="t", description="d", sql="SELECT 1")
+    assert spec.safe is True and spec.params == [] and spec.max_rows is None
+
+
+def test_sql_tool_spec_rejects_bad_name_and_empty_sql() -> None:
+    with pytest.raises(ValidationError):
+        SqlToolSpec(name="9bad", description="d", sql="SELECT 1")
+    with pytest.raises(ValidationError):
+        SqlToolSpec(name="t", description="d", sql="   ")
 
 VALID_YAML = textwrap.dedent(
     """\

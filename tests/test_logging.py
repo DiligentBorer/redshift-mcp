@@ -262,7 +262,7 @@ def test_sql_audit_end_to_end_writes_to_standalone_file(tmp_path: Path) -> None:
     token = request_id_var.set("trace42")
     try:
         main.info("普通运行日志")
-        audit.info("SQL: SELECT * FROM dwd.t_user WHERE email='x@y.com'")
+        audit.info("SQL: SELECT * FROM analytics.users WHERE email='x@y.com'")
     finally:
         request_id_var.reset(token)
 
@@ -280,7 +280,7 @@ def test_sql_audit_end_to_end_writes_to_standalone_file(tmp_path: Path) -> None:
     assert "x@y.com" not in main_content
 
     # 审计文件只含 SQL，不含运行日志噪音
-    assert "SELECT * FROM dwd.t_user" in audit_content
+    assert "SELECT * FROM analytics.users" in audit_content
     assert "trace42" in audit_content   # request_id filter 也作用于 audit handler
     assert "普通运行日志" not in audit_content
 
@@ -317,6 +317,7 @@ def _reset_logging():
         "redshift_mcp",
         "redshift_mcp.sql_audit",   # SQL 审计子 logger
         "redshift_mcp.plugins",     # 插件子 logger 子树（兜底，防未来插件改 level/propagate）
+        "redshift_mcp.plugins.sql_tools",  # 声明式 SQL 工具子 logger（显式兜底）
         "uvicorn",
         "uvicorn.error",
         "uvicorn.access",

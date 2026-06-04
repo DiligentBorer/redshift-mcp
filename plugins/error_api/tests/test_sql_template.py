@@ -1,36 +1,35 @@
-"""SQL 模板占位符规范的回归测试。
+"""error_api 包内 SQL 的回归测试（SQL 现内聚在 queries/error_api.sql，importlib.resources 读取）。
 
-psycopg3 只允许 %s/%b/%t 这几类占位符。LIKE 模式里的字面量 '%'
-必须写成 '%%'。之前曾出现过 `%localhost%` 被解析成 '%l'（非法占位符）
-的 bug；本测试用于防止该回归。
+守护两件事：
+1. SQL 资源能被读到（防打成 wheel 时漏掉 .sql）。
+2. 只用命名占位符 `%(event_date)s` / `%(limit)s`，且没有未转义的裸 `%`
+   —— LIKE 模式里的字面 `%` 必须写成 `%%`，否则 psycopg3 抛 ProgrammingError。
 """
 from __future__ import annotations
 
+import importlib.resources
 import re
 
-from redshift_mcp_error_api.query import SQL_TEMPLATE
-
-# psycopg3 只允许下列占位符；%% 为字面 percent 的转义形式。
-ALLOWED = {"s", "b", "t", "%"}
+from redshift_mcp_error_api.query import SQL
 
 
-def test_sql_template_has_only_allowed_placeholders() -> None:
-    tokens = re.findall(r"%(.)", SQL_TEMPLATE)
-    forbidden = [t for t in tokens if t not in ALLOWED]
-    assert forbidden == [], (
-        f"SQL_TEMPLATE 含有非法占位符 {forbidden}; "
-        f"LIKE 模式里的字面量 '%' 必须转义为 '%%'。"
+def test_sql_resource_loadable() -> None:
+    """importlib.resources 能读到包内 .sql（防打包漏文件）。"""
+    res = importlib.resources.files("redshift_mcp_error_api").joinpath(
+        "queries", "error_api.sql"
     )
+    assert res.read_text(encoding="utf-8").strip()
 
 
-def test_sql_template_has_exactly_two_parameter_slots() -> None:
-    """一个给 us_day，一个给 LIMIT max_rows+1。"""
-    tokens = re.findall(r"%(.)", SQL_TEMPLATE)
-    param_slots = [t for t in tokens if t == "s"]
-    assert len(param_slots) == 2, (
-        f"期望恰好 2 个 %s 占位符（us_day + LIMIT），实际 {len(param_slots)} 个"
+def test_sql_uses_named_placeholders() -> None:
+    assert SQL.strip()
+    assert "%(event_date)s" in SQL
+    assert "%(limit)s" in SQL
+
+
+def test_no_unescaped_bare_percent() -> None:
+    # 去掉合法的 %(name)s 命名占位符与 %% 转义后，不应再有裸 %。
+    stripped = re.sub(r"%\([A-Za-z_]\w*\)s", "", SQL).replace("%%", "")
+    assert "%" not in stripped, (
+        "SQL 含未转义的裸 '%'；LIKE 模式里的字面量 '%' 必须写成 '%%'。"
     )
-
-
-def test_sql_template_contains_limit_clause() -> None:
-    assert "LIMIT %s" in SQL_TEMPLATE, "必须包含 LIMIT 子句，在服务端就截断结果规模"

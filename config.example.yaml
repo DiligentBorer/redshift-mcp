@@ -34,6 +34,8 @@ plugins:
   # 已安装但想临时不启用的插件名列表（按 entry-point name 匹配）。
   # 例: disabled: ["error_api"]
   disabled: []
+  # 注：插件的私有配置内聚在各插件内部，本 host 配置不承载（例如 error_api 的 SQL
+  # 在其包内的 queries/error_api.sql）。这里只有「加载开关」，没有 plugins.config。
 
 logging:
   level: INFO                   # DEBUG | INFO | WARNING | ERROR | CRITICAL
@@ -69,15 +71,50 @@ logging:
 tables: []
 # 示例:
 # tables:
-#   - name: dwd.t_action_info_widen
-#     description: "用户行为流水宽表（ip / 设备 / 来源 / 国家 / 日期）"
+#   - name: analytics.events
+#     description: "事件流水宽表（IP / 设备 / 国家 / 日期）"
 #     columns:
-#       ip:
+#       client_ip:
 #         description: "客户端 IP"
 #         example_values: ["1.2.3.4"]
-#       us_day:
-#         description: "US 时区日期，YYYY-MM-DD"
+#       event_date:
+#         description: "事件日期，YYYY-MM-DD"
 #         example_values: ["2026-05-20"]
-#   - name: dwd.t_user_info
+#   - name: analytics.users
 #     description: "用户主数据表"
 #     # 不写 columns 也可以；schema 全部由 DB 动态拉取
+
+# ============================================================================
+# 声明式 SQL 工具（第二种插件机制：零代码，直接在 config 里声明 → 启动注册成 MCP 工具）
+# ============================================================================
+# 每项 = 一个工具。参数 type 支持 string / int / date / enum；调用时由 FastMCP 按
+# schema 校验类型，date 额外按 format 校验。SQL 用命名占位符 %(参数名)s 绑定（安全，
+# 不拼字符串）。LIKE 模式里的字面 % 要写成 %%。
+#
+# 安全闸门：safe 默认 true —— 注册时校验 SQL 是单条只读 SELECT（拒 DML/DDL/多语句/
+# SELECT INTO），不通过则跳过该工具。个别确需特殊语句的可设 safe: false 关闭（运维自负）。
+# 注意：闸门不自动加 LIMIT，请务必在 SQL 里自带 LIMIT（否则大表会先全量拉回再截断）。
+sql_tools: []
+# 示例:
+# sql_tools:
+#   - name: active_devices_by_day
+#     description: "查询指定日期某国家的活跃设备数"
+#     sql: |                     # 也可换成 sql_file: queries/active_devices.sql
+#       SELECT country, COUNT(DISTINCT device_id) AS devices
+#       FROM analytics.events
+#       WHERE event_date = %(date)s AND country = %(country)s
+#       GROUP BY country
+#       LIMIT 100
+#     params:
+#       - {name: date, type: date, format: "%Y-%m-%d", description: "事件日期"}
+#       - {name: country, type: enum, enum: ["US", "CA", "UK"], description: "国家码"}
+#     # max_rows: 5000           # 可选，覆盖全局 query.max_rows
+#     # safe: true               # 默认 true；个别特殊语句可设 false 关闭只读闸门
+
+# ----------------------------------------------------------------------------
+# 配置拆分（可选）：条目多时把 sql_tools / tables 拆到独立片段文件，主配置只留一行 include。
+# include 是 glob（相对本文件目录），片段按「列表追加 / dict 深合并 / 标量片段覆盖」并入。
+# 片段里的 sql_tools 条目可用 sql_file: ../queries/x.sql 把大 SQL 外链到独立 .sql。
+# include:
+#   - conf.d/*.yaml
+

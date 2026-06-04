@@ -99,6 +99,17 @@ sudo systemctl restart redshift-mcp
 启动后 `journalctl` 里会出现 `插件已加载: <name> (...)`。临时禁用某个已装插件，
 在 `config.yaml` 设 `plugins.disabled: ["<name>"]` 后重启即可。
 
+### 声明式 SQL 工具（零代码）+ 配置拆分
+
+简单 SQL 不必写 Python 插件，直接在 `config.yaml` 的 `sql_tools:` 段声明即可（详见 README「插件系统」），
+启动 `journalctl` 会出现 `声明式 SQL 工具已注册: <name>`。声明式工具默认有只读安全闸门（`safe: true`），
+**但不自动加 LIMIT，SQL 务必自带 LIMIT**。
+
+条目多时可拆分：主 `config.yaml` 写 `include: ["conf.d/*.yaml"]`（glob 相对配置目录，即
+`/etc/redshift-mcp/conf.d/`），把 `sql_tools` / `tables` 拆到片段；片段里 `sql_file: ../queries/x.sql`
+可把大 SQL 外链到独立 `.sql`（相对片段目录）。这些目录都需与 config.yaml 同处 `/etc/redshift-mcp/`
+且对 service user 可读（`systemd` 的 `ProtectSystem=strict` 下 `/etc` 默认只读、无需额外放行）。
+
 ## 5. 配置文件
 
 ```bash
@@ -198,6 +209,7 @@ sudo journalctl -u redshift-mcp -f --since "1 min ago"
 - `Redshift 连接池就绪 (host=... statement_timeout_ms=60000 ...)`
 - `插件已加载: error_api (redshift_mcp_error_api:register)`
 - `插件加载完成，共 1 个: error_api` / `插件注册完成: ['error_api']`
+- `声明式 SQL 工具加载完成，共 N 个: ...` / `声明式 SQL 工具: [...]`（N=0 时为 `(无)`）
 - `启动 redshift-mcp，监听 http://127.0.0.1:8000/redshift`
 - `Uvicorn running on http://127.0.0.1:8000`
 
@@ -374,6 +386,8 @@ sudo systemctl restart redshift-mcp
 | 虚拟环境（uv 管理） | `/opt/redshift-mcp/.venv` |
 | Python 解释器 | `/var/lib/redshift-mcp/.local/share/uv/python/cpython-3.13.*/` |
 | 配置 | `/etc/redshift-mcp/config.yaml`（0640 root:redshift-mcp） |
+| 配置片段（可选，include 合并） | `/etc/redshift-mcp/conf.d/*.yaml` |
+| 外链 SQL（可选，sql_file） | `/etc/redshift-mcp/queries/*.sql` |
 | 日志（滚动，5 × 10 MB） | `/var/log/redshift-mcp/redshift-mcp.log*` |
 | systemd unit | `/etc/systemd/system/redshift-mcp.service` |
 | Nginx 站点 | `/etc/nginx/conf.d/redshift-mcp.conf` + `redshift-mcp.proxy.inc` |

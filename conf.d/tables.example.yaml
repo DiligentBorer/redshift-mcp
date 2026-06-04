@@ -1,0 +1,13 @@
+# 配置拆分示例片段：通用查询能力的表白名单。
+# 用法：在主 config.yaml 写 `include: ["conf.d/*.yaml"]`，去掉本文件的 .example 后缀。
+# 本片段里的 tables 会被「追加」到主配置的 tables 列表。
+tables:
+  - name: analytics.events
+    description: "事件流水宽表（IP / 设备 / 国家 / 日期）"
+    columns:
+      client_ip:
+        description: "客户端 IP"
+        example_values: ["1.2.3.4"]
+      event_date:
+        description: "事件日期，YYYY-MM-DD"
+        example_values: ["2026-05-20"]

@@ -26,8 +26,8 @@ def cfg_with_whitelist(monkeypatch):
             "server": {"auth_token": "t"},
             "query": {"max_rows": 100},
             "tables": [
-                {"name": "dwd.t_user", "description": "用户主表"},
-                {"name": "dwd.t_action_info_widen"},
+                {"name": "analytics.users", "description": "用户主表"},
+                {"name": "analytics.events"},
             ],
         }
     )
@@ -48,9 +48,9 @@ def test_list_tables_returns_whitelist(cfg_with_whitelist) -> None:
     result = server.list_tables()
     assert len(result) == 2
     names = {t["name"] for t in result}
-    assert names == {"dwd.t_user", "dwd.t_action_info_widen"}
+    assert names == {"analytics.users", "analytics.events"}
     # 含 description 字段（可为 None）
-    user_row = next(t for t in result if t["name"] == "dwd.t_user")
+    user_row = next(t for t in result if t["name"] == "analytics.users")
     assert user_row["description"] == "用户主表"
 
 
@@ -96,9 +96,9 @@ def test_describe_table_accepts_case_insensitive(cfg_with_whitelist, monkeypatch
     monkeypatch.setattr(server.db, "fetch_table_columns", fake_fetch_cols)
     monkeypatch.setattr(server.db, "fetch_table_info", fake_fetch_info)
 
-    result = server.describe_table("DWD.T_USER")
-    assert result["name"] == "dwd.t_user"
-    assert called == {"schema": "dwd", "table": "t_user"}
+    result = server.describe_table("ANALYTICS.USERS")
+    assert result["name"] == "analytics.users"
+    assert called == {"schema": "analytics", "table": "users"}
 
 
 # ===== run_sql =====
@@ -106,7 +106,7 @@ def test_describe_table_accepts_case_insensitive(cfg_with_whitelist, monkeypatch
 
 def test_run_sql_rejects_dml(cfg_with_whitelist) -> None:
     with pytest.raises(ValueError, match="只允许查询语句"):
-        server.run_sql("DROP TABLE dwd.t_user")
+        server.run_sql("DROP TABLE analytics.users")
 
 
 def test_run_sql_rejects_unauthorized_table(cfg_with_whitelist) -> None:
@@ -135,7 +135,7 @@ def test_run_sql_executes_on_valid(cfg_with_whitelist, monkeypatch) -> None:
 
     monkeypatch.setattr(server.db, "query_sql", fake_query_sql)
 
-    result = server.run_sql("SELECT ip FROM dwd.t_action_info_widen WHERE us_day='2026-05-20'")
+    result = server.run_sql("SELECT ip FROM analytics.events WHERE event_date='2026-05-20'")
     assert result == {"count": 0, "truncated": False, "columns": [], "rows": []}
     # apply_row_cap 应已追加 LIMIT max_rows + 1 = 101
     assert "LIMIT 101" in captured["sql"]
@@ -190,7 +190,7 @@ def test_describe_table_merges_column_desc_case_insensitive(cfg_with_whitelist, 
         "server": {"auth_token": "t"},
         "query": {"max_rows": 100},
         "tables": [{
-            "name": "dwd.t_user",
+            "name": "analytics.users",
             "columns": {
                 "ip": {"description": "客户端 IP", "example_values": ["1.2.3.4"]},
             },
@@ -203,7 +203,7 @@ def test_describe_table_merges_column_desc_case_insensitive(cfg_with_whitelist, 
                         lambda s, t: [{"name": "IP", "type": "varchar", "ordinal_position": 1}])
     monkeypatch.setattr(server.db, "fetch_table_info", lambda s, t: None)
 
-    result = server.describe_table("dwd.t_user")
+    result = server.describe_table("analytics.users")
     col = result["columns"][0]
     assert col["name"] == "IP"  # DB 返回的原始 case 保留
     assert col["description"] == "客户端 IP"
@@ -216,7 +216,7 @@ def test_describe_table_rejects_empty_columns(cfg_with_whitelist, monkeypatch) -
     monkeypatch.setattr(server.db, "fetch_table_info", lambda s, t: None)
 
     with pytest.raises(ValueError, match="查不到任何列"):
-        server.describe_table("dwd.t_user")
+        server.describe_table("analytics.users")
 
 
 # ===== T-4: 空白名单 / 错误消息含 list_tables 提示 =====
@@ -231,7 +231,7 @@ def test_run_sql_empty_whitelist_message(monkeypatch) -> None:
     })
     monkeypatch.setattr(server, "_cfg", cfg)
     with pytest.raises(ValueError, match=r"白名单为 \(空\)"):
-        server.run_sql("SELECT * FROM dwd.t_user")
+        server.run_sql("SELECT * FROM analytics.users")
 
 
 def test_error_messages_include_list_tables_hint(cfg_with_whitelist) -> None:
@@ -284,7 +284,7 @@ def test_run_sql_rejection_sql_goes_to_audit_channel(cfg_with_whitelist, caplog)
 def test_run_sql_rejection_main_log_has_no_sql_text(cfg_with_whitelist, caplog) -> None:
     """主 logger 的 INFO 拒绝事件**不应**含 SQL 全文（PII 隔离）。"""
     import logging
-    sql_with_pii = "SELECT * FROM secret.evil WHERE email='boss@flamingo.shop'"
+    sql_with_pii = "SELECT * FROM secret.evil WHERE email='boss@xxx.com'"
     with caplog.at_level(logging.INFO, logger="redshift_mcp"):
         with pytest.raises(ValueError):
             server.run_sql(sql_with_pii)
@@ -292,6 +292,6 @@ def test_run_sql_rejection_main_log_has_no_sql_text(cfg_with_whitelist, caplog) 
     assert main_records, "应当有 INFO 级拒绝事件"
     for r in main_records:
         # PII（邮箱）不能泄漏到主 logger
-        assert "boss@flamingo.shop" not in r.message
+        assert "boss@xxx.com" not in r.message
         # SQL SELECT * 关键字也不应进主 logger（防 PII 间接泄漏）
         assert "SELECT *" not in r.message

@@ -1,0 +1,13 @@
+# 配置拆分示例片段：声明式 SQL 工具。
+# 用法：在主 config.yaml 写 `include: ["conf.d/*.yaml"]`，去掉本文件的 .example 后缀。
+# 本片段里的 sql_tools 会被「追加」到主配置的 sql_tools 列表。
+sql_tools:
+  - name: active_devices_by_day
+    description: "查询指定日期某国家的活跃设备数"
+    # sql_file 相对本片段文件所在目录（conf.d/）解析；这里指向 ../queries/active_devices.sql
+    sql_file: ../queries/active_devices.sql
+    params:
+      - {name: date, type: date, format: "%Y-%m-%d", description: "US 时区日期"}
+      - {name: country, type: enum, enum: ["US", "CA", "UK"], description: "国家码"}
+    # max_rows: 5000
+    # safe: true
