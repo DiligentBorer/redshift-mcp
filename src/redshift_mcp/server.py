@@ -406,7 +406,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="redshift-mcp",
-        description="MCP Server (Streamable HTTP) exposing Redshift Error API queries.",
+        description="Generic Redshift MCP server (Streamable HTTP) with a plugin framework.",
     )
     parser.add_argument(
         "--config",
