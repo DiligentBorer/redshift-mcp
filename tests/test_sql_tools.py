@@ -137,6 +137,51 @@ def test_duplicate_name_skipped(caplog) -> None:
     assert "dup" in caplog.text
 
 
+def test_optional_int_enum_params_are_nullable(monkeypatch) -> None:
+    """L5：可选 int / enum 参数注解包成 Optional —— schema 标记可空、不在 required，
+    省略调用时绑定 None 而不被签名/pydantic 拒。"""
+    captured = {}
+    monkeypatch.setattr(
+        db, "execute",
+        lambda sql, params=None, *, max_rows: captured.update(params=params) or
+        {"count": 0, "truncated": False, "columns": [], "rows": []},
+    )
+    tools = [{
+        "name": "opt",
+        "description": "可选参数",
+        "sql": "SELECT %(n)s AS n, %(c)s AS c LIMIT 1",
+        "params": [
+            {"name": "n", "type": "int", "required": False},
+            {"name": "c", "type": "enum", "enum": ["US", "CA"], "required": False},
+        ],
+    }]
+    ctx = _ctx(tools)
+    assert register_sql_tools(ctx) == ["opt"]
+    tool = ctx.mcp._tool_manager._tools["opt"]
+    assert tool.parameters.get("required", []) == []        # 两个都可选
+    # Optional 注解让 schema 允许 null（anyOf 含 null，或 type 列表含 "null"）
+    n_schema = tool.parameters["properties"]["n"]
+    assert "null" in str(n_schema)
+    # 省略可选参数调用 → 绑定 None，不抛
+    _fn(ctx, "opt")()
+    assert captured["params"] == {"n": None, "c": None}
+
+
+def test_missing_limit_warns(caplog) -> None:
+    """M3：safe=True 且 SQL 顶层无 LIMIT → 记一条 warn（不阻断注册）。"""
+    tools = [{
+        "name": "nolimit",
+        "description": "无 LIMIT",
+        "sql": "SELECT country FROM analytics.events WHERE country = %(c)s",
+        "params": [{"name": "c", "type": "string"}],
+    }]
+    ctx = _ctx(tools)
+    with caplog.at_level(logging.WARNING, logger="redshift_mcp.plugins.sql_tools"):
+        registered = register_sql_tools(ctx)
+    assert registered == ["nolimit"]                        # 仍注册成功
+    assert "无 LIMIT" in caplog.text or "LIMIT" in caplog.text
+
+
 def test_optional_param_after_required_ok() -> None:
     # config 里 optional 在前、required 在后 —— 注册时自动排序，不报 Signature 错
     tools = [{
