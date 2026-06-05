@@ -103,7 +103,7 @@ def _build_tool(spec: SqlToolSpec, ctx: PluginContext) -> Callable[..., dict[str
         annotations[p.name] = ann
     annotations["return"] = dict
 
-    def _impl(**kwargs: Any) -> dict[str, Any]:
+    async def _impl(**kwargs: Any) -> dict[str, Any]:
         # int / enum 已由 FastMCP + pydantic 按 schema 上游校验；这里只补 date 格式校验。
         bind: dict[str, Any] = {}
         for p in spec.params:
@@ -119,7 +119,8 @@ def _build_tool(spec: SqlToolSpec, ctx: PluginContext) -> Callable[..., dict[str
 
         rid = ctx.request_id_var.get()
         try:
-            return db.execute(
+            # 阻塞 DB 调用走 db.aexecute（to_thread），不阻塞事件循环。
+            return await db.aexecute(
                 spec.sql, bind,
                 max_rows=spec.max_rows or ctx.config.query.max_rows,
             )

@@ -69,16 +69,16 @@ def _build_tool(get_pool: Callable = lambda: (_ for _ in ()).throw(
         "not-a-date",
     ],
 )
-def test_invalid_dates_rejected(bad_date: str) -> None:
+async def test_invalid_dates_rejected(bad_date: str) -> None:
     tool = _build_tool()
     with pytest.raises(ValueError) as excinfo:
-        tool(bad_date)
+        await tool(bad_date)
     msg = str(excinfo.value)
     assert "日期格式不合法" in msg
     assert "YYYY-MM-DD" in msg
 
 
-def test_valid_date_progresses_past_strptime() -> None:
+async def test_valid_date_progresses_past_strptime() -> None:
     """对于格式正确的日期，strptime 不应抛错；之后流转到 DB 访问层。
 
     这里 get_pool 抛 RuntimeError（连接池未初始化），会被 db_runtime_errors
@@ -87,7 +87,7 @@ def test_valid_date_progresses_past_strptime() -> None:
     """
     tool = _build_tool()
     with pytest.raises(RuntimeError) as excinfo:
-        tool("2026-05-20")
+        await tool("2026-05-20")
     msg = str(excinfo.value)
     assert "日期格式不合法" not in msg
     assert "查询失败" in msg

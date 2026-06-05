@@ -72,7 +72,7 @@ def test_register_and_input_schema() -> None:
     assert set(tool.parameters["required"]) == {"date", "country"}
 
 
-def test_valid_call_binds_named_params(monkeypatch) -> None:
+async def test_valid_call_binds_named_params(monkeypatch) -> None:
     captured = {}
 
     def fake_execute(sql, params=None, *, max_rows):
@@ -82,34 +82,34 @@ def test_valid_call_binds_named_params(monkeypatch) -> None:
     monkeypatch.setattr(db, "execute", fake_execute)
     ctx = _ctx(_tools(), max_rows=777)
     register_sql_tools(ctx)
-    result = _fn(ctx, "top")(date="2026-05-20", country="US")
+    result = await _fn(ctx, "top")(date="2026-05-20", country="US")
     assert result["count"] == 0
     assert captured["params"] == {"date": "2026-05-20", "country": "US"}
     assert captured["max_rows"] == 777          # 用全局 query.max_rows
     assert captured["sql"] == _SELECT            # 执行用原始带占位符 SQL
 
 
-def test_max_rows_override(monkeypatch) -> None:
+async def test_max_rows_override(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(db, "execute",
                         lambda sql, params=None, *, max_rows: captured.update(max_rows=max_rows) or
                         {"count": 0, "truncated": False, "columns": [], "rows": []})
     ctx = _ctx(_tools(max_rows=5), max_rows=100)
     register_sql_tools(ctx)
-    _fn(ctx, "top")(date="2026-05-20", country="US")
+    await _fn(ctx, "top")(date="2026-05-20", country="US")
     assert captured["max_rows"] == 5             # spec.max_rows 覆盖全局
 
 
-def test_bad_date_raises_valueerror(monkeypatch) -> None:
+async def test_bad_date_raises_valueerror(monkeypatch) -> None:
     monkeypatch.setattr(db, "execute", lambda *a, **k: pytest.fail("不该走到 db.execute"))
     ctx = _ctx(_tools())
     register_sql_tools(ctx)
     with pytest.raises(ValueError) as exc:
-        _fn(ctx, "top")(date="2026/05/20", country="US")
+        await _fn(ctx, "top")(date="2026/05/20", country="US")
     assert "日期格式不合法" in str(exc.value)
 
 
-def test_db_error_wrapped_with_rid(monkeypatch) -> None:
+async def test_db_error_wrapped_with_rid(monkeypatch) -> None:
     def boom(*a, **k):
         raise RuntimeError("pool down")
 
@@ -117,7 +117,7 @@ def test_db_error_wrapped_with_rid(monkeypatch) -> None:
     ctx = _ctx(_tools())
     register_sql_tools(ctx)
     with pytest.raises(RuntimeError) as exc:
-        _fn(ctx, "top")(date="2026-05-20", country="US")
+        await _fn(ctx, "top")(date="2026-05-20", country="US")
     msg = str(exc.value)
     assert "查询失败" in msg and "request_id=" in msg
     assert "日期格式不合法" not in msg
@@ -137,7 +137,7 @@ def test_duplicate_name_skipped(caplog) -> None:
     assert "dup" in caplog.text
 
 
-def test_optional_int_enum_params_are_nullable(monkeypatch) -> None:
+async def test_optional_int_enum_params_are_nullable(monkeypatch) -> None:
     """L5：可选 int / enum 参数注解包成 Optional —— schema 标记可空、不在 required，
     省略调用时绑定 None 而不被签名/pydantic 拒。"""
     captured = {}
@@ -163,7 +163,7 @@ def test_optional_int_enum_params_are_nullable(monkeypatch) -> None:
     n_schema = tool.parameters["properties"]["n"]
     assert "null" in str(n_schema)
     # 省略可选参数调用 → 绑定 None，不抛
-    _fn(ctx, "opt")()
+    await _fn(ctx, "opt")()
     assert captured["params"] == {"n": None, "c": None}
 
 
