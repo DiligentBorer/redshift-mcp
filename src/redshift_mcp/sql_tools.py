@@ -48,7 +48,7 @@ def register_sql_tools(ctx: PluginContext) -> list[str]:
         if spec.safe:
             try:
                 # 占位符先替换成中性整数字面量，sqlglot 才能解析（执行仍用原始带占位符 SQL）。
-                sql_guard.assert_read_only(_PLACEHOLDER.sub("1", spec.sql))
+                ast = sql_guard.assert_read_only(_PLACEHOLDER.sub("1", spec.sql))
             except ValueError as exc:
                 logger.error(
                     "声明式 SQL 工具未通过安全闸门，已跳过: %s（%s）。"
@@ -56,6 +56,14 @@ def register_sql_tools(ctx: PluginContext) -> list[str]:
                     spec.name, exc,
                 )
                 continue
+            # 闸门不自动加 LIMIT；顶层缺 LIMIT 时大表会被全量拉回内存再截断 →
+            # 记 warn 把隐患显性化（不阻断注册，max_rows 仍会在拉回后截断）。
+            if ast.args.get("limit") is None:
+                logger.warning(
+                    "声明式 SQL 工具 %s 的 SQL 顶层无 LIMIT；大结果集会被全量拉回内存"
+                    "后再按 max_rows 截断，建议在 SQL 里自带 LIMIT。",
+                    spec.name,
+                )
         ctx.mcp.add_tool(
             _build_tool(spec, ctx), name=spec.name, description=spec.description
         )
@@ -82,6 +90,10 @@ def _build_tool(spec: SqlToolSpec, ctx: PluginContext) -> Callable[..., dict[str
     annotations: dict[str, Any] = {}
     for p in ordered:
         base = typing.Literal[tuple(p.enum)] if p.type == "enum" else _PYTYPE[p.type]
+        # 可选参数：注解包成 base | None，让 schema 表达「可空」，避免 int/enum 注解
+        # 收到 None 默认值时被 pydantic 拒绝。描述包裹（Annotated）放在 Optional 外层。
+        if not p.required:
+            base = typing.Optional[base]
         desc = (p.description or "")
         if p.type == "date":
             desc = (desc + f"（格式 {p.format}）").strip()
@@ -91,7 +103,7 @@ def _build_tool(spec: SqlToolSpec, ctx: PluginContext) -> Callable[..., dict[str
         annotations[p.name] = ann
     annotations["return"] = dict
 
-    def _impl(**kwargs: Any) -> dict[str, Any]:
+    async def _impl(**kwargs: Any) -> dict[str, Any]:
         # int / enum 已由 FastMCP + pydantic 按 schema 上游校验；这里只补 date 格式校验。
         bind: dict[str, Any] = {}
         for p in spec.params:
@@ -107,7 +119,8 @@ def _build_tool(spec: SqlToolSpec, ctx: PluginContext) -> Callable[..., dict[str
 
         rid = ctx.request_id_var.get()
         try:
-            return db.execute(
+            # 阻塞 DB 调用走 db.aexecute（to_thread），不阻塞事件循环。
+            return await db.aexecute(
                 spec.sql, bind,
                 max_rows=spec.max_rows or ctx.config.query.max_rows,
             )

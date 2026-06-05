@@ -6,10 +6,19 @@
 3. 顶层必须是查询（``exp.Query`` 子类，含 ``Select`` / ``Union`` / ``Intersect`` / ``Except``）；
    拒绝 INSERT / UPDATE / DELETE / DROP / CREATE / ALTER / SET 等命令
 4. 显式拒绝任何 ``SELECT INTO`` / ``SELECT INTO TEMP``（防御未来权限漂移）
-5. 查询内所有引用的表必须**全限定** schema.table，并且都在白名单内
+5. 查询内所有引用的表必须**全限定** schema.table，并且都在白名单内；引用与白名单
+   统一归一成三段式 ``database.schema.table`` 比对（未写库前缀用配置默认库补全），
+   挡住三段式 ``otherdb.schema.table`` 的跨库越权
 6. CTE 别名不参与白名单校验（属于 in-query 局部命名空间）
 
 通过校验后返回 AST，调用方可以基于 AST 继续做安全的改写（如追加 LIMIT）。
+
+安全模型（**务必理解**）：本闸门是**纵深防御的第一层**，其严密程度等于
+``sqlglot(read="redshift")`` 的解析保真度 —— 解析器与真实 Redshift 语法存在偏差时
+（少见但存在），个别构造可能漏判。因此**只读 Redshift 角色是不可省略的第二层**：
+即便闸门被绕过，DB 侧也必须从权限上拒绝任何写操作 / 越权读取。**绝不能把本闸门
+当作唯一的访问控制**；部署时务必用仅授予所需 schema/表 SELECT 权限的只读账号
+（见 README「安全注意事项」与 DEPLOY 上线检查清单）。
 """
 from __future__ import annotations
 
@@ -84,14 +93,30 @@ def assert_read_only(sql: str) -> exp.Expression:
     return ast
 
 
-def validate_select_only(sql: str, allowed_tables: set[str]) -> exp.Expression:
+def validate_select_only(
+    sql: str,
+    allowed_tables: set[str],
+    default_database: str | None = None,
+) -> exp.Expression:
     """对外唯一入口：校验通过返回 AST，违规抛 ``ValueError``。
 
     在 ``assert_read_only``（单条只读查询）基础上，再强制所有引用表全限定且在白名单内。
 
+    白名单与 SQL 引用统一在「数据库前缀 + schema.table」层面比对：
+
+    - 传入 ``default_database`` 时（``run_sql`` 的真实路径），每处引用的归一键是
+      ``(catalog or default_database).schema.table`` —— 没写库前缀的默认用配置库补全，
+      显式写了别的库（``otherdb.schema.table``）则保留该库前缀，从而与三段式白名单
+      做严格匹配、挡住跨库越权读取。
+    - 不传 ``default_database`` 时（旧调用 / 部分单测），保持原两段式 ``schema.table``
+      归一（不引入库前缀），向后兼容。
+
     Args:
         sql: 待校验的 SQL 字符串。
-        allowed_tables: 归一化后的白名单全限定表名集合（小写 ``schema.table``）。
+        allowed_tables: 归一化后的白名单全限定表名集合（小写；三段或两段，与
+            ``default_database`` 是否传入对应）。
+        default_database: 配置的默认 database 名（``cfg.database.dbname``）；用于给
+            未写库前缀的引用补全，并统一成三段式比对。
 
     Returns:
         sqlglot Expression 顶层节点（必为 ``Select``）。
@@ -104,6 +129,8 @@ def validate_select_only(sql: str, allowed_tables: set[str]) -> exp.Expression:
         alias = cte.alias_or_name
         if alias:
             cte_aliases.add(alias.lower())
+
+    default_db = (default_database or "").lower()
 
     # 遍历所有 Table 引用（含 FROM / JOIN / 子查询）
     referenced: set[str] = set()
@@ -118,8 +145,10 @@ def validate_select_only(sql: str, allowed_tables: set[str]) -> exp.Expression:
             continue
         if not schema:
             bare_refs.add(tname)
-        else:
-            referenced.add(f"{schema}.{tname}")
+            continue
+        # 库前缀 = 显式 catalog，否则用配置默认库补全（仅当传了 default_database）。
+        prefix = (table.catalog or "").lower() or default_db
+        referenced.add(f"{prefix}.{schema}.{tname}" if prefix else f"{schema}.{tname}")
 
     if bare_refs:
         raise ValueError(

@@ -228,12 +228,12 @@ def list_tables() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def describe_table(table: str) -> dict[str, Any]:
+async def describe_table(table: str) -> dict[str, Any]:
     """查指定表的列、类型与可选补充说明。
 
-    入参 ``table`` 必须是 schema-qualified 全名（如
-    ``analytics.events``），且必须先在 ``list_tables`` 返回的
-    白名单中出现，否则拒绝。
+    入参 ``table`` 必须是 schema-qualified 全名（``schema.table`` 或
+    ``database.schema.table``，如 ``analytics.events``）；未写库前缀时按配置默认
+    database 归一。必须先在 ``list_tables`` 返回的白名单中出现，否则拒绝。
 
     列信息从 Redshift ``SVV_COLUMNS`` 实时拉取，并叠加 config 里同名列
     的 ``description`` / ``example_values`` 提示（如有配置）。
@@ -242,26 +242,30 @@ def describe_table(table: str) -> dict[str, Any]:
         ``{name, description, columns: [{name, type, ordinal_position,
         description?, example_values?}], row_count_estimate?}``
     """
-    if not isinstance(table, str) or "." not in table:
+    cfg = _get_cfg()
+    # 支持 schema.table（两段）或 database.schema.table（三段）；统一归一成三段式键
+    # （未写库前缀的用 cfg.database.dbname 补全），与 run_sql 闸门同一规则。
+    parts = table.split(".") if isinstance(table, str) else []
+    if len(parts) not in (2, 3) or any(not p.strip() for p in parts):
         raise ValueError(
-            f"表名必须是 schema.table 格式: {table!r}。"
+            f"表名必须是 schema.table 或 database.schema.table 格式: {table!r}。"
             f"请先调用 list_tables 查看可用表全名。"
         )
-    table_norm = table.lower()
-    cfg = _get_cfg()
+    catalog = parts[0] if len(parts) == 3 else ""
+    schema, tname = parts[-2].lower(), parts[-1].lower()
+    table_norm = cfg.normalize_table_ref(catalog, schema, tname)
     if table_norm not in cfg.allowed_table_names():
         raise ValueError(
             f"表 {table_norm!r} 不在白名单内。"
             f"请先调用 list_tables 查看可用表全名。"
         )
 
-    spec = next((t for t in cfg.tables if t.name == table_norm), None)
-    schema, tname = table_norm.split(".", 1)
+    spec = cfg.tables_by_norm.get(table_norm)
 
     rid = request_id_var.get()
     try:
-        raw_columns = db.fetch_table_columns(schema, tname)
-        table_info = db.fetch_table_info(schema, tname)
+        raw_columns = await db.afetch_table_columns(schema, tname)
+        table_info = await db.afetch_table_info(schema, tname)
     except _DB_RUNTIME_ERRORS as exc:
         logger.exception("describe_table 失败 table=%s", table_norm)
         raise RuntimeError(
@@ -301,7 +305,7 @@ def describe_table(table: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def run_sql(sql: str) -> dict[str, Any]:
+async def run_sql(sql: str) -> dict[str, Any]:
     """执行单条 SELECT 并返回结果。
 
     所有引用的表都必须 schema-qualified（``schema.table``），且都在
@@ -325,7 +329,9 @@ def run_sql(sql: str) -> dict[str, Any]:
     #   - sql_audit_logger.info("被拒绝的 SQL: <完整 SQL>") 走 audit 通道，
     #     默认 sql_audit_level=WARNING 时不输出，运维需要审计时切 INFO 才落盘
     try:
-        ast = sql_guard.validate_select_only(sql, cfg.allowed_table_names())
+        ast = sql_guard.validate_select_only(
+            sql, cfg.allowed_table_names(), cfg.database.dbname
+        )
     except ValueError as exc:
         logger.info("run_sql 拒绝: %s", exc)
         sql_audit_logger.info("被拒绝的 SQL: %s", sql)
@@ -333,7 +339,7 @@ def run_sql(sql: str) -> dict[str, Any]:
     capped_sql = sql_guard.apply_row_cap(ast, cfg.query.max_rows)
 
     try:
-        return db.query_sql(capped_sql, max_rows=cfg.query.max_rows)
+        return await db.aquery_sql(capped_sql, max_rows=cfg.query.max_rows)
     except _DB_RUNTIME_ERRORS as exc:
         # 完整 traceback（带 rid）通过 filter 写到运行日志。
         # SQL 文本本身可能含 PII（WHERE 子句里的邮箱/用户名等），不进运行
@@ -400,7 +406,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="redshift-mcp",
-        description="MCP Server (Streamable HTTP) exposing Redshift Error API queries.",
+        description="Generic Redshift MCP server (Streamable HTTP) with a plugin framework.",
     )
     parser.add_argument(
         "--config",

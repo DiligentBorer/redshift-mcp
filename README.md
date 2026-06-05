@@ -178,11 +178,15 @@ npx @modelcontextprotocol/inspector
 
 ## 安全注意事项
 
-- 使用**只读** Redshift 账号 —— 即便 `run_sql` 校验出 bug，DB 层也兜底拒绝写操作。
+- **纵深防御的两层模型（务必理解）**：`run_sql` 的 sqlglot 闸门 + 表白名单是**第一层**，
+  其严密程度取决于 sqlglot 的 Redshift 解析保真度；**只读 Redshift 账号是不可省略的第二层**。
+  必须用**只读**账号、且权限仅授予所需 schema/表的 SELECT —— 即便闸门被绕过，DB 层也从
+  权限上兜底拒绝写操作 / 越权读取。**切勿把闸门当作唯一访问控制。**
 - 定期轮换 `auth_token`；把 `config.yaml` 当作 secret 处理（它已经在 `.gitignore`）。
 - 所有外部入参（含 `date` / 声明式 SQL 工具的参数）都以 psycopg3 的**命名占位符 `%(name)s`** 绑定，不做字符串拼接 —— 不存在 SQL 注入。`date` 类参数额外用 `datetime.strptime(..., "%Y-%m-%d")` 在工具体里做格式校验。
 - `run_sql` 用 sqlglot 解析 AST 强制：单条 SELECT / 全限定表名 / 所有引用表必须在白名单。
-  CTE 别名识别为 in-query 局部命名空间，不当作"未授权表"误杀。
+  引用与白名单统一归一成三段式 `database.schema.table` 比对（未写库前缀用配置默认库补全），
+  挡住三段式 `otherdb.schema.table` 的跨库越权；CTE 别名识别为 in-query 局部命名空间，不当作"未授权表"误杀。
 - **声明式 SQL 工具**（`sql_tools:`）默认走只读安全闸门（`safe: true`），注册期校验单条只读 SELECT，
   拦 DML/DDL/多语句/`SELECT INTO`；个别工具如需特殊语句可设 `safe: false`，由运维自负。
   闸门**不自动加 `LIMIT`**，运维应在 SQL 里自带。

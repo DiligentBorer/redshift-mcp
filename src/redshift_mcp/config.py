@@ -72,15 +72,20 @@ class ColumnSpec(BaseModel):
 class TableSpec(BaseModel):
     """白名单中一张允许查询的表。"""
 
-    name: str   # 全限定 schema.table，会被归一为小写
+    name: str   # 全限定 schema.table 或 database.schema.table，会被归一为小写
     description: str | None = None
     columns: dict[str, ColumnSpec] = Field(default_factory=dict)
 
     @field_validator("name")
     @classmethod
     def _name_has_schema(cls, v: str) -> str:
-        if not isinstance(v, str) or v.count(".") != 1 or v.startswith(".") or v.endswith("."):
-            raise ValueError("表名必须是 schema.table 格式（恰好一个点，且两侧非空）")
+        # 支持两段（schema.table）或三段（database.schema.table）。两段式在
+        # AppConfig.allowed_table_names_set 归一时用 database.dbname 补全前缀。
+        parts = v.split(".") if isinstance(v, str) else []
+        if len(parts) not in (2, 3) or any(not p.strip() for p in parts):
+            raise ValueError(
+                "表名必须是 schema.table 或 database.schema.table 格式（各段非空）"
+            )
         return v.lower()
 
 
@@ -194,16 +199,41 @@ class AppConfig(BaseModel):
     sql_tools: list[SqlToolSpec] = Field(default_factory=list)
 
     @cached_property
+    def tables_by_norm(self) -> dict[str, TableSpec]:
+        """三段式归一键（``database.schema.table``，小写）→ TableSpec 映射，缓存一次。
+
+        两段式白名单条目用 ``database.dbname`` 补全 database 前缀；三段式原样。
+        ``describe_table`` 用它做白名单成员判断 + 取列说明 spec；``run_sql``
+        的白名单集合也由此派生。统一三段式后，SQL 引用无论写两段还是三段都能
+        按同一规则归一比对，挡住跨库（``otherdb.schema.table``）越权读取。
+        """
+        db = self.database.dbname.lower()
+        out: dict[str, TableSpec] = {}
+        for t in self.tables:
+            parts = t.name.split(".")
+            key = f"{db}.{t.name}" if len(parts) == 2 else t.name
+            out[key] = t
+        return out
+
+    @cached_property
     def allowed_table_names_set(self) -> frozenset[str]:
-        """白名单的归一化全限定名集合（schema.table，小写），缓存一次。"""
-        return frozenset(t.name for t in self.tables)
+        """白名单的三段式归一全限定名集合（``database.schema.table``，小写），缓存一次。"""
+        return frozenset(self.tables_by_norm)
 
     def allowed_table_names(self) -> set[str]:
-        """返回白名单中所有表的归一化全限定名集合（小写 schema.table）。
+        """返回白名单中所有表的三段式归一全限定名集合（小写 ``database.schema.table``）。
 
         保留函数形式向后兼容；底层走 ``allowed_table_names_set`` 缓存。
         """
         return set(self.allowed_table_names_set)
+
+    def normalize_table_ref(self, catalog: str, schema: str, table: str) -> str:
+        """把一处表引用归一成三段式键（小写）。``catalog`` 为空时用 ``database.dbname`` 补全。
+
+        ``run_sql`` 闸门与 ``describe_table`` 共用这条归一规则，保证两边对称。
+        """
+        db = (catalog or self.database.dbname).lower()
+        return f"{db}.{schema.lower()}.{table.lower()}"
 
 
 def _read_yaml(path: Path) -> dict:

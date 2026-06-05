@@ -25,9 +25,15 @@ def test_tablespec_name_without_schema_rejected() -> None:
         TableSpec(name="t_action_info")
 
 
-def test_tablespec_name_too_many_dots_rejected() -> None:
+def test_tablespec_name_three_part_accepted() -> None:
+    """三段式 database.schema.table 是合法白名单条目，归一为小写。"""
+    t = TableSpec(name="MyDB.Analytics.t_x")
+    assert t.name == "mydb.analytics.t_x"
+
+
+def test_tablespec_name_four_part_rejected() -> None:
     with pytest.raises(ValidationError, match="schema.table"):
-        TableSpec(name="db.analytics.t_x")
+        TableSpec(name="a.b.c.d")
 
 
 def test_tablespec_name_starts_with_dot_rejected() -> None:
@@ -64,15 +70,21 @@ def test_appconfig_tables_default_empty() -> None:
 
 
 def test_appconfig_allowed_table_names() -> None:
+    """两段式条目用 database.dbname 补全前缀，三段式条目原样，统一归一成三段式键。"""
     cfg = AppConfig.model_validate({
-        "database": {"host": "h", "dbname": "d", "user": "u"},
+        "database": {"host": "h", "dbname": "D", "user": "u"},
         "server": {"auth_token": "t"},
         "tables": [
-            {"name": "ANALYTICS.t_a"},
-            {"name": "Core.t_b"},
+            {"name": "ANALYTICS.t_a"},          # 两段 → 补 dbname 前缀
+            {"name": "Core.t_b"},               # 两段 → 补 dbname 前缀
+            {"name": "OtherDB.public.t_c"},     # 三段 → 原样
         ],
     })
-    assert cfg.allowed_table_names() == {"analytics.t_a", "core.t_b"}
+    assert cfg.allowed_table_names() == {
+        "d.analytics.t_a",
+        "d.core.t_b",
+        "otherdb.public.t_c",
+    }
 
 
 def test_appconfig_allowed_table_names_cached(monkeypatch) -> None:
@@ -86,7 +98,7 @@ def test_appconfig_allowed_table_names_cached(monkeypatch) -> None:
     second = cfg.allowed_table_names_set
     # cached_property 的标志：两次访问返回**同一个对象**
     assert first is second
-    assert first == frozenset({"analytics.t_a", "analytics.t_b"})
+    assert first == frozenset({"d.analytics.t_a", "d.analytics.t_b"})
 
 
 def test_load_config_with_tables(tmp_path: Path) -> None:

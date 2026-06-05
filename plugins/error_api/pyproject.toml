@@ -21,6 +21,5 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/redshift_mcp_error_api"]
 
-# 在 uv workspace（monorepo）下，把对宿主的依赖指向本地源而非 PyPI。
-[tool.uv.sources]
-redshift-mcp = { workspace = true }
+# 注：对宿主 redshift-mcp 的 workspace source 映射集中在根 pyproject 的
+# [tool.uv.sources]（uv 惯例），本成员不再单独声明。

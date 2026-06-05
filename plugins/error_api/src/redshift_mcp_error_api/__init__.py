@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from functools import partial
 from typing import Any
 
+import anyio
 from redshift_mcp.plugin import PluginContext
 
 from .query import run_query
@@ -23,7 +25,7 @@ def register(ctx: PluginContext) -> None:
     log = ctx.logger.getChild("error_api")
 
     @ctx.mcp.tool()
-    def query_error_api_by_date(date: str) -> dict[str, Any]:
+    async def query_error_api_by_date(date: str) -> dict[str, Any]:
         """查询指定日期（US 时区）的 Error API IP 命中统计。
 
         Args:
@@ -46,11 +48,15 @@ def register(ctx: PluginContext) -> None:
 
         rid = ctx.request_id_var.get()
         try:
-            return run_query(
-                ctx.get_pool(),
-                date,
-                max_rows=ctx.config.query.max_rows,
-                logger=log,
+            # 阻塞查询丢到 worker 线程，不阻塞事件循环。
+            return await anyio.to_thread.run_sync(
+                partial(
+                    run_query,
+                    ctx.get_pool(),
+                    date,
+                    max_rows=ctx.config.query.max_rows,
+                    logger=log,
+                )
             )
         except ctx.db_runtime_errors as exc:
             # 完整 traceback（带 rid）通过 filter 写到服务端日志。
