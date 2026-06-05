@@ -97,7 +97,8 @@ def test_describe_table_accepts_case_insensitive(cfg_with_whitelist, monkeypatch
     monkeypatch.setattr(server.db, "fetch_table_info", fake_fetch_info)
 
     result = server.describe_table("ANALYTICS.USERS")
-    assert result["name"] == "analytics.users"
+    # 返回归一后的三段式名（两段输入用 dbname=d 补全前缀）
+    assert result["name"] == "d.analytics.users"
     assert called == {"schema": "analytics", "table": "users"}
 
 

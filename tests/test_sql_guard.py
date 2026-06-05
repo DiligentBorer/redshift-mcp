@@ -343,3 +343,41 @@ def test_apply_row_cap_offset_without_limit() -> None:
     out = apply_row_cap(ast, max_rows=100)
     assert "LIMIT 101" in out
     assert "OFFSET 100" in out
+
+
+# ===== 三段式归一化 + 跨库越权防御（default_database）=====
+
+# 传入 default_database 时白名单按三段式给出（两段条目已被上游补 dbname 前缀）。
+ALLOWED_3 = {"mydb.analytics.events", "mydb.analytics.users"}
+
+
+def test_two_part_ref_normalized_with_default_db() -> None:
+    """SQL 写两段（无库前缀）→ 用 default_database 补全后命中三段式白名单。"""
+    ast = validate_select_only(
+        "SELECT ip FROM analytics.events", ALLOWED_3, "mydb"
+    )
+    assert ast is not None
+
+
+def test_three_part_ref_matching_default_db_passes() -> None:
+    """SQL 显式写当前库的三段式 → 与白名单一致，放行（不误杀）。"""
+    ast = validate_select_only(
+        "SELECT ip FROM mydb.analytics.events", ALLOWED_3, "mydb"
+    )
+    assert ast is not None
+
+
+def test_cross_database_three_part_ref_rejected() -> None:
+    """核心防御：三段式指向另一个库 → 不命中白名单 → 拒绝（跨库越权）。"""
+    with pytest.raises(ValueError, match="白名单"):
+        validate_select_only(
+            "SELECT ip FROM otherdb.analytics.events", ALLOWED_3, "mydb"
+        )
+
+
+def test_default_db_is_case_insensitive() -> None:
+    """default_database 与 catalog 比对大小写不敏感。"""
+    ast = validate_select_only(
+        "SELECT ip FROM MyDB.Analytics.Events", ALLOWED_3, "MYDB"
+    )
+    assert ast is not None
