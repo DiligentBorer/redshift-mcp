@@ -37,10 +37,11 @@ logs/
 .claude/
 
 # 业务 SQL 不进 git —— 仓库里只接受 .example.sql 形式的范本文件
-# （host 的 queries/ 和插件包内的 queries/ 都覆盖）
-**/queries/*.sql
+# （host 的 queries/ 和插件包内的 queries/ 都覆盖；包括子目录、非 sql 文件在内都排除）
+**/queries/*
 !**/queries/*.example.sql
 
 # 配置片段同理 —— conf.d/ 下只接受 .example.yaml 形式的范本
-conf.d/*.yaml
+# （包括子目录、非 yaml 文件在内都排除；仅顶层 .example.yaml 放行）
+conf.d/*
 !conf.d/*.example.yaml
