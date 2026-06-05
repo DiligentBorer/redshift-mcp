@@ -6,10 +6,19 @@
 3. 顶层必须是查询（``exp.Query`` 子类，含 ``Select`` / ``Union`` / ``Intersect`` / ``Except``）；
    拒绝 INSERT / UPDATE / DELETE / DROP / CREATE / ALTER / SET 等命令
 4. 显式拒绝任何 ``SELECT INTO`` / ``SELECT INTO TEMP``（防御未来权限漂移）
-5. 查询内所有引用的表必须**全限定** schema.table，并且都在白名单内
+5. 查询内所有引用的表必须**全限定** schema.table，并且都在白名单内；引用与白名单
+   统一归一成三段式 ``database.schema.table`` 比对（未写库前缀用配置默认库补全），
+   挡住三段式 ``otherdb.schema.table`` 的跨库越权
 6. CTE 别名不参与白名单校验（属于 in-query 局部命名空间）
 
 通过校验后返回 AST，调用方可以基于 AST 继续做安全的改写（如追加 LIMIT）。
+
+安全模型（**务必理解**）：本闸门是**纵深防御的第一层**，其严密程度等于
+``sqlglot(read="redshift")`` 的解析保真度 —— 解析器与真实 Redshift 语法存在偏差时
+（少见但存在），个别构造可能漏判。因此**只读 Redshift 角色是不可省略的第二层**：
+即便闸门被绕过，DB 侧也必须从权限上拒绝任何写操作 / 越权读取。**绝不能把本闸门
+当作唯一的访问控制**；部署时务必用仅授予所需 schema/表 SELECT 权限的只读账号
+（见 README「安全注意事项」与 DEPLOY 上线检查清单）。
 """
 from __future__ import annotations
 
