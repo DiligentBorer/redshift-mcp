@@ -228,7 +228,7 @@ def list_tables() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def describe_table(table: str) -> dict[str, Any]:
+async def describe_table(table: str) -> dict[str, Any]:
     """查指定表的列、类型与可选补充说明。
 
     入参 ``table`` 必须是 schema-qualified 全名（``schema.table`` 或
@@ -264,8 +264,8 @@ def describe_table(table: str) -> dict[str, Any]:
 
     rid = request_id_var.get()
     try:
-        raw_columns = db.fetch_table_columns(schema, tname)
-        table_info = db.fetch_table_info(schema, tname)
+        raw_columns = await db.afetch_table_columns(schema, tname)
+        table_info = await db.afetch_table_info(schema, tname)
     except _DB_RUNTIME_ERRORS as exc:
         logger.exception("describe_table 失败 table=%s", table_norm)
         raise RuntimeError(
@@ -305,7 +305,7 @@ def describe_table(table: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def run_sql(sql: str) -> dict[str, Any]:
+async def run_sql(sql: str) -> dict[str, Any]:
     """执行单条 SELECT 并返回结果。
 
     所有引用的表都必须 schema-qualified（``schema.table``），且都在
@@ -339,7 +339,7 @@ def run_sql(sql: str) -> dict[str, Any]:
     capped_sql = sql_guard.apply_row_cap(ast, cfg.query.max_rows)
 
     try:
-        return db.query_sql(capped_sql, max_rows=cfg.query.max_rows)
+        return await db.aquery_sql(capped_sql, max_rows=cfg.query.max_rows)
     except _DB_RUNTIME_ERRORS as exc:
         # 完整 traceback（带 rid）通过 filter 写到运行日志。
         # SQL 文本本身可能含 PII（WHERE 子句里的邮箱/用户名等），不进运行

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import time
+from functools import partial
 from typing import Any
 
+import anyio
 import psycopg
 import psycopg._encodings as _pg_enc
 from psycopg.rows import dict_row
@@ -225,3 +227,38 @@ def execute(
         "columns": columns,
         "rows": rows,
     }
+
+
+# ---- async 封装：把上面的阻塞 psycopg 调用丢到 worker 线程 ----
+#
+# FastMCP 对同步工具是 inline 执行（func_metadata 里 `return fn(...)`，不走线程池），
+# 单 worker / 单事件循环下一条慢查询会阻塞整个 loop、串行化所有并发请求。工具改成
+# async 后用下面的封装把阻塞 I/O 丢到线程，事件循环得以继续处理其它请求 / SSE 心跳。
+# anyio.to_thread.run_sync 会把当前 contextvars 复制进线程，因此 request_id 等仍可读
+# （不过本项目的 rid 都在协程里先 .get() 再调用，不依赖这一点）。
+# 同步实现保持不变，供这些封装与（如有）同步调用方共用。
+
+
+async def aquery_sql(sql: str, *, max_rows: int) -> dict[str, Any]:
+    """``query_sql`` 的 async 封装（阻塞执行丢到 worker 线程）。"""
+    return await anyio.to_thread.run_sync(partial(query_sql, sql, max_rows=max_rows))
+
+
+async def aexecute(
+    sql: str,
+    params: tuple[Any, ...] | dict[str, Any] | None = None,
+    *,
+    max_rows: int,
+) -> dict[str, Any]:
+    """``execute`` 的 async 封装（阻塞执行丢到 worker 线程）。"""
+    return await anyio.to_thread.run_sync(partial(execute, sql, params, max_rows=max_rows))
+
+
+async def afetch_table_columns(schema: str, table: str) -> list[dict[str, Any]]:
+    """``fetch_table_columns`` 的 async 封装。"""
+    return await anyio.to_thread.run_sync(fetch_table_columns, schema, table)
+
+
+async def afetch_table_info(schema: str, table: str) -> dict[str, Any] | None:
+    """``fetch_table_info`` 的 async 封装。"""
+    return await anyio.to_thread.run_sync(fetch_table_info, schema, table)
