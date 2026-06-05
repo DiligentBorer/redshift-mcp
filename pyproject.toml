@@ -35,9 +35,12 @@ dev = [
 [tool.uv.workspace]
 members = ["plugins/*"]
 
-# 把对自带插件的 dev 依赖指向本地 workspace 成员，而非 PyPI
+# Workspace 范围的 source 映射集中在根（uv 惯例）：
+# - 主程序对自带插件的 dev 依赖指向本地 workspace 成员，而非 PyPI；
+# - 插件包对宿主 redshift-mcp 的依赖同样走本地 workspace（原写在成员 pyproject，已上收至此）。
 [tool.uv.sources]
 redshift-mcp-error-api = { workspace = true }
+redshift-mcp = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "plugins/error_api/tests"]
