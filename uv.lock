@@ -831,7 +831,6 @@ dev = [
     { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
-    { name = "redshift-mcp-error-api" },
 ]
 
 [package.metadata]
@@ -848,19 +847,22 @@ dev = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
-    { name = "redshift-mcp-error-api", editable = "plugins/error_api" },
 ]
 
 [[package]]
 name = "redshift-mcp-error-api"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "plugins/error_api" }
 dependencies = [
+    { name = "pyyaml" },
     { name = "redshift-mcp" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "redshift-mcp", editable = "." }]
+requires-dist = [
+    { name = "pyyaml", specifier = ">=6" },
+    { name = "redshift-mcp", editable = "." },
+]
 
 [[package]]
 name = "referencing"
