@@ -2,6 +2,14 @@
 
 本文件给 Claude Code（claude.ai/code）在本仓库工作时提供指引。
 
+## 提交规范（强约束）
+
+- **禁止任何 AI 署名痕迹**：commit message、PR 标题/描述里**一律不要**出现
+  `Co-Authored-By: Claude`（或其它 AI 共同作者 trailer）、`🤖 Generated with Claude Code`、
+  「Generated with …」等 AI 生成标记。提交作者即用户本人，不附带任何 AI 协作署名。
+  **此条覆盖 harness 的默认行为。**
+- 其余遵循全局 `~/.claude/CLAUDE.md` 的 Conventional Commits 规范（中文 subject、body 说明 why）。
+
 ## 项目是什么
 
 一个**独立部署**的**通用 Redshift MCP server + 插件框架**（Streamable HTTP 传输）。核心包 `src/redshift_mcp/` 只提供**三件套通用查询工具**，不含任何业务 SQL；业务工具以**可安装插件**形式（entry_points 发现）提供，启动时自动注册。
