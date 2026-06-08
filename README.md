@@ -20,9 +20,9 @@
 
 - **`query_error_api_by_date(date: str)`** —— `date` 为 `YYYY-MM-DD` 格式，返回
   `{date, count, truncated, rows: [{client_ip, device_count}, ...]}`，按 `device_count` 降序。
-  由插件包 `redshift-mcp-error-api`（`plugins/error_api/`）提供，**SQL 内聚在插件包内**
-  `plugins/error_api/src/redshift_mcp_error_api/queries/error_api.example.sql`（`query.py` 通过
-  `importlib.resources` 读取），命名占位符 `%(event_date)s` / `%(limit)s`。不受表白名单约束。
+  由插件包 `redshift-mcp-error-api`（`plugins/error_api/`）提供，**SQL 由插件自有 `config.yaml`
+  提供**（插件按 `env var > 包内约定路径` 自行加载，见 `_config.py`；仓库只提交模板
+  `queries/error_api.example.sql`），命名占位符 `%(event_date)s` / `%(limit)s`。不受表白名单约束。
   逻辑示意（实际文件里 `LIKE` 模式的字面 `%` 都写成 `%%` 以避开 psycopg3 占位符扫描）：
 
 
@@ -32,7 +32,7 @@
 
 ```bash
 cd McpRedshift
-uv sync
+uv sync --all-packages    # 主程序 + plugins/* 下所有插件一并 editable 装好
 cp config.example.yaml config.yaml
 # 编辑 config.yaml：填入 Redshift host/dbname/user/password 与 auth_token
 ```
@@ -80,7 +80,7 @@ Authorization: Bearer <server.auth_token>
 
 核心包 `src/redshift_mcp/` 不含任何业务 SQL。扩展工具有**两种机制**：
 
-- **① Python 插件（entry_points）** —— 写代码的全功能插件，独立可安装包，装进同一 venv 即自动发现。**插件私有配置内聚在插件内部**（如自带 `error_api` 的 SQL 在其包内 `queries/error_api.example.sql`），host `config.yaml` 不承载插件配置。
+- **① Python 插件（entry_points）** —— 写代码的全功能插件，独立可安装包，装进同一 venv 即自动发现（**不需要改 host 任何配置**）。**插件私有配置内聚在插件内部**：插件如需外部配置（如自带 `error_api` 的业务 SQL），自带一个 `config.yaml`（结构与 host 同构）并自行加载（`env var > 包内约定路径`），host `config.yaml` 不承载插件配置。
 - **② 声明式 SQL 工具（零代码）** —— 直接在 `config.yaml` 的 `sql_tools:` 里声明 `{name, description, sql, params}`，启动自动注册成 MCP 工具。适合简单 SQL。
 
 ### 方式一：写一个 Python 插件
@@ -111,10 +111,10 @@ Authorization: Bearer <server.auth_token>
 ### 安装与启用
 
 ```bash
-# monorepo（uv workspace）开发期：uv sync 一并把自带的 error_api editable 装好
-uv sync
+# monorepo（uv workspace）开发期：--all-packages 把 plugins/* 下所有插件 editable 装好
+uv sync --all-packages
 
-# 或单独打包后装进与主程序同一个 venv
+# 或单独打包后装进与主程序同一个 venv（第三方插件即走这条，零 host 改动）
 uv build --package redshift-mcp-error-api
 uv pip install dist/redshift_mcp_error_api-*.whl
 ```
