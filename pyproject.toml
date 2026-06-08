@@ -27,21 +27,19 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "httpx>=0.27",   # required by starlette.testclient
-    # 自带 Demo 插件：随 uv sync 一并 editable 安装，使其 entry-point 在开发期生效
-    "redshift-mcp-error-api",
 ]
 
-# uv workspace（monorepo）：plugins/ 下每个目录都是一个 workspace 成员包
+# uv workspace（monorepo）：plugins/ 下每个目录都是一个 workspace 成员包（通配，新增插件无需逐个声明）。
+# 自带插件靠 `uv sync --all-packages` 一并 editable 装上，使其 entry-point 在开发期生效。
+# 第三方插件不碰这里：自建 wheel、`uv pip install` 进同一 venv 即被 entry_points 自动发现加载。
 [tool.uv.workspace]
 members = ["plugins/*"]
 
-# Workspace 范围的 source 映射集中在根（uv 惯例）：
-# - 主程序对自带插件的 dev 依赖指向本地 workspace 成员，而非 PyPI；
-# - 插件包对宿主 redshift-mcp 的依赖同样走本地 workspace（原写在成员 pyproject，已上收至此）。
+# 各成员包对宿主 redshift-mcp 的依赖走本地 workspace（按包名匹配，一条覆盖所有成员，无需逐插件写）。
 [tool.uv.sources]
-redshift-mcp-error-api = { workspace = true }
 redshift-mcp = { workspace = true }
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "plugins/error_api/tests"]
+# plugins/*/tests 通配纳入各插件自带测试（pytest≥7 支持 testpaths glob），新增插件无需登记。
+testpaths = ["tests", "plugins/*/tests"]
 asyncio_mode = "auto"
