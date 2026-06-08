@@ -1,45 +1,36 @@
 """Error API IP 统计查询的执行逻辑。
 
-SQL 不再硬编码在此 —— 它内聚在包内 ``queries/error_api.example.sql``（命名加
-``.example.`` 中缀以示「仓库自带范本」语义；详见仓库根 .gitignore），由
-``importlib.resources`` 读取。配置内聚在插件内部，不侵入 host config.yaml；改 SQL
-= 改那个 .sql 文件并重新打包 wheel。
+SQL 不在此硬编码，也不在 import 期读包内文件 —— 它由插件自有 ``config.yaml`` 提供（解析优先级
+``env var > 包内约定路径``，见 ``_config.py``），在 ``register`` 启动时解析一次后透传进来。
+模板见仓库 ``config.example.yaml`` / ``queries/error_api.example.sql``，仅在 git、不进生产 wheel。
 """
 from __future__ import annotations
 
-import importlib.resources
 import logging
 import time
 from typing import Any
 
 from psycopg_pool import ConnectionPool
 
-# 包内自带的 SQL 范本（package data）。命名占位符 %(event_date)s / %(limit)s。
-# 注：importlib.resources 在 editable 安装下直接读源码树；打成 wheel 后需确保
-# .example.sql 进包（见插件 pyproject 的 hatch 配置 / 用 unzip -l 验证）。
-SQL: str = (
-    importlib.resources.files(__package__)
-    .joinpath("queries", "error_api.example.sql")
-    .read_text(encoding="utf-8")
-)
-
 
 def run_query(
     pool: ConnectionPool,
     event_date: str,
     *,
+    sql: str,
     max_rows: int,
     logger: logging.Logger,
 ) -> dict[str, Any]:
     """用宿主的共享连接池对指定 event_date 跑一次 Error API IP 统计查询。
 
-    服务端用 SQL ``LIMIT %(limit)s``（= max_rows + 1）限制结果规模；当返回行数大于
-    ``max_rows`` 时把 ``truncated`` 标为 ``True``。
+    ``sql`` 由调用方传入（来自插件 config，命名占位符 ``%(event_date)s`` / ``%(limit)s``）。
+    服务端用 ``LIMIT %(limit)s``（= max_rows + 1）限制结果规模；当返回行数大于 ``max_rows`` 时把
+    ``truncated`` 标为 ``True``。
     """
     t0 = time.monotonic()
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(SQL, {"event_date": event_date, "limit": max_rows + 1})
+            cur.execute(sql, {"event_date": event_date, "limit": max_rows + 1})
             rows = cur.fetchall()
     elapsed_ms = int((time.monotonic() - t0) * 1000)
 

@@ -17,6 +17,17 @@ from redshift_mcp.plugin import PluginContext
 from redshift_mcp_error_api import register
 
 
+@pytest.fixture(autouse=True)
+def _error_api_config(tmp_path, monkeypatch):
+    """register 现在要求插件自有配置 —— 喂一份最小 config（含内联 SQL）让它通过。
+
+    日期校验与本配置无关，只是让 ``register`` 能成功解析 SQL 并注册工具。
+    """
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text('sql: "SELECT 1"\n', encoding="utf-8")
+    monkeypatch.setenv("REDSHIFT_MCP_ERROR_API_CONFIG", str(cfg))
+
+
 class _CapturingMCP:
     """最小 FastMCP 替身：``.tool()`` 装饰器只把被注册函数捕获下来供测试调用。"""
 

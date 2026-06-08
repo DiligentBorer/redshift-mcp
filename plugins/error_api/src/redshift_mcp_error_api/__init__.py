@@ -16,6 +16,7 @@ from typing import Any
 import anyio
 from redshift_mcp.plugin import PluginContext
 
+from ._config import load_resolved_sql
 from .query import run_query
 
 
@@ -23,6 +24,8 @@ def register(ctx: PluginContext) -> None:
     """插件注册入口：把 query_error_api_by_date 工具挂到宿主的 FastMCP 实例上。"""
     # 用 redshift_mcp.plugins.error_api 子 logger（自动冒泡到主 handler）。
     log = ctx.logger.getChild("error_api")
+    # 启动时解析一次插件自有配置里的 SQL（缺配置则抛错，由 load_plugins 隔离、跳过本插件）。
+    sql = load_resolved_sql(log)
 
     @ctx.mcp.tool()
     async def query_error_api_by_date(date: str) -> dict[str, Any]:
@@ -54,6 +57,7 @@ def register(ctx: PluginContext) -> None:
                     run_query,
                     ctx.get_pool(),
                     date,
+                    sql=sql,
                     max_rows=ctx.config.query.max_rows,
                     logger=log,
                 )

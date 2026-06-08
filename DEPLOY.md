@@ -73,31 +73,35 @@ sudo chmod 0750 /var/log/redshift-mcp
 sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
   git clone <你的仓库地址> .
-  uv sync                   # 自动下载 cpython-3.13；workspace 会一并 editable 装好
-                            # 主程序 redshift-mcp + 自带插件 redshift-mcp-error-api
+  uv sync --all-packages    # 自动下载 cpython-3.13；--all-packages 把主程序 + plugins/* 下
+                            # 所有自带插件（含 redshift-mcp-error-api）一并 editable 装好
   uv run pytest -q          # 所有测试应当通过
 '
 ```
 
 ### 部署额外插件
 
-业务工具以可安装包形式分发，装进与主程序**同一个 venv** 即被 entry_points 自动发现。
-自带的 `error_api` 插件随仓库 `uv sync` 已装好；要新增第三方插件，二选一：
+业务工具以可安装包形式分发，装进与主程序**同一个 venv** 即被 entry_points 自动发现，
+**不需要改 host 的任何配置**。自带的 `error_api` 插件随仓库 `uv sync --all-packages` 已装好；
+要新增第三方插件，二选一：
 
 ```bash
 sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
-  # 方式一：插件已发布成 wheel
+  # 方式一（推荐，零 host 改动）：插件已发布成 wheel，直接装进 venv
   uv pip install /path/to/my_plugin-*.whl
   # 方式二：把插件源码作为 workspace 成员放进 plugins/ 后重新 sync
-  #   （需在根 pyproject.toml 的 dependency-groups 里引用它）
-  uv sync
+  #   （members=["plugins/*"] 通配自动纳入，无需改 root pyproject）
+  uv sync --all-packages
 '
 sudo systemctl restart redshift-mcp
 ```
 
-启动后 `journalctl` 里会出现 `插件已加载: <name> (...)`。临时禁用某个已装插件，
+启动后 `journalctl` 里会出现插件注册日志。临时禁用某个已装插件，
 在 `config.yaml` 设 `plugins.disabled: ["<name>"]` 后重启即可。
+
+> 若插件自带外部配置（如 `error_api` 的业务 SQL），见该插件 README —— 它自行从约定路径 /
+> env var 加载，未配置则启动时报错跳过该插件（不影响其余工具）。
 
 ### 声明式 SQL 工具（零代码）+ 配置拆分
 
@@ -343,18 +347,18 @@ tail -f /var/log/redshift-mcp/redshift-mcp.log
 sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
   git fetch && git checkout <new-tag-or-commit>
-  uv sync
+  uv sync --all-packages
 '
 sudo systemctl restart redshift-mcp
 sudo systemctl status redshift-mcp
 ```
 
-`uv.lock` 在仓库里锁定依赖版本。Python 大版本切换时（比如 3.13 → 3.14），用 `rm -rf .venv && uv sync` 重建。
+`uv.lock` 在仓库里锁定依赖版本。Python 大版本切换时（比如 3.13 → 3.14），用 `rm -rf .venv && uv sync --all-packages` 重建。
 
 ## 12. 回滚
 
 ```bash
-sudo -u redshift-mcp -H bash -lc 'cd /opt/redshift-mcp && git checkout <prev-tag> && uv sync'
+sudo -u redshift-mcp -H bash -lc 'cd /opt/redshift-mcp && git checkout <prev-tag> && uv sync --all-packages'
 sudo systemctl restart redshift-mcp
 ```
 

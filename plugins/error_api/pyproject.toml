@@ -1,12 +1,14 @@
 [project]
 name = "redshift-mcp-error-api"
-version = "0.1.0"
+version = "0.2.0"
 description = "redshift-mcp 插件：Error API IP 命中统计（业务预设查询）"
 readme = "README.md"
 requires-python = ">=3.10"
-# 依赖宿主主程序，用于 import PluginContext 类型；workspace 下走本地源（见下）。
+# 依赖宿主主程序（import PluginContext 类型）；自带配置加载用 pyyaml，独立项目显式声明、不靠 host 传递。
+# workspace 下 redshift-mcp 走本地源（见根 pyproject 的 [tool.uv.sources]）。
 dependencies = [
     "redshift-mcp",
+    "pyyaml>=6",
 ]
 
 # 关键：声明 entry-point，让主程序通过 importlib.metadata 自动发现本插件。
@@ -17,6 +19,21 @@ error_api = "redshift_mcp_error_api:register"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# 打包模型：build wheel 面向生产，把真实 config.yaml / *.sql 打进去（生产即装即用、默认路径即命中）。
+# 放在 [tool.hatch.build] 全局层（而非仅 targets.wheel），让 sdist 与 wheel 都生效 ——
+# 否则 `uv build` 先打 sdist 再从 sdist 出 wheel，仅 wheel 配的 artifacts 会被绕过。
+[tool.hatch.build]
+# 真实文件被根 .gitignore 忽略，hatchling 默认跳过，故用 artifacts 强制纳入。
+artifacts = [
+    "src/redshift_mcp_error_api/config.yaml",
+    "src/redshift_mcp_error_api/queries/error_api.sql",
+]
+# 模板只留 git 仓库、不进分发包（否则会污染包目录、被误当默认配置）。
+exclude = [
+    "**/config.example.yaml",
+    "**/*.example.sql",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/redshift_mcp_error_api"]
