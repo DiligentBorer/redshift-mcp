@@ -135,7 +135,7 @@ sql_tools:
       FROM analytics.events
       WHERE event_date = %(date)s AND country = %(country)s
       GROUP BY country
-      LIMIT 100                # 务必自带 LIMIT（安全闸门不会自动加）
+      LIMIT 100                # LIMIT 可选：缺则自动追加 LIMIT (max_rows+1)；显式写则原样尊重
     params:
       - {name: date, type: date, format: "%Y-%m-%d", description: "US 时区日期"}
       - {name: country, type: enum, enum: ["US", "CA", "UK"], description: "国家码"}
@@ -144,7 +144,8 @@ sql_tools:
 ```
 
 - **参数**：`type` 支持 `string` / `int` / `date` / `enum`；FastMCP 按 schema 校验类型，`date` 额外按 `format` 校验。SQL 用命名占位符 `%(参数名)s` 安全绑定（不拼字符串）；LIKE 模式里字面 `%` 写成 `%%`。
-- **安全闸门**：`safe`（默认 `true`）在注册时校验 SQL 是**单条只读 SELECT**（拒 DML/DDL/多语句/SELECT INTO），不通过则跳过该工具并记 error。个别确需特殊语句的可设 `safe: false`（运维自负）。注意闸门**不自动加 LIMIT**，请自带。
+- **安全闸门**：`safe`（默认 `true`）在注册时校验 SQL 是**单条只读 SELECT**（拒 DML/DDL/多语句/SELECT INTO），不通过则跳过该工具并记 error。个别确需特殊语句的可设 `safe: false`（运维自负）。
+- **LIMIT 自动下推**：`safe=true` 时若 SQL 顶层无 LIMIT，自动追加 `LIMIT (max_rows+1)`（`max_rows` 取 `spec.max_rows` 或全局 `query.max_rows`）下推到 DB，避免大表全量拉回内存；显式写了 LIMIT 则原样尊重、不收紧。`safe=false` 不自动加，须自带。
 
 ### 配置拆分（条目多时）
 
@@ -189,7 +190,7 @@ npx @modelcontextprotocol/inspector
   挡住三段式 `otherdb.schema.table` 的跨库越权；CTE 别名识别为 in-query 局部命名空间，不当作"未授权表"误杀。
 - **声明式 SQL 工具**（`sql_tools:`）默认走只读安全闸门（`safe: true`），注册期校验单条只读 SELECT，
   拦 DML/DDL/多语句/`SELECT INTO`；个别工具如需特殊语句可设 `safe: false`，由运维自负。
-  闸门**不自动加 `LIMIT`**，运维应在 SQL 里自带。
+  对 `safe: true` 工具，顶层无 `LIMIT` 时自动追加 `LIMIT (max_rows+1)` 下推到 DB、显式写了则原样尊重；`safe: false` 不自动加，须自带。
 - **SQL 文本默认不进运行日志**（`sql_audit_level=WARNING`）—— LLM 写 `WHERE email='...'` 之类的 PII 不会落到 `redshift-mcp.log`。
   需要审计时把 `sql_audit_level` 改成 `INFO`；想物理隔离审计与运行日志，再配 `sql_audit_file: ./logs/sql-audit.log` 走独立文件。
 - 部署在反向代理之后时，TLS 在上游终结。

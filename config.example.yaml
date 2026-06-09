@@ -93,7 +93,8 @@ tables: []
 #
 # 安全闸门：safe 默认 true —— 注册时校验 SQL 是单条只读 SELECT（拒 DML/DDL/多语句/
 # SELECT INTO），不通过则跳过该工具。个别确需特殊语句的可设 safe: false 关闭（运维自负）。
-# 注意：闸门不自动加 LIMIT，请务必在 SQL 里自带 LIMIT（否则大表会先全量拉回再截断）。
+# LIMIT 可写可不写：顶层缺 LIMIT 时（仅 safe=true）自动追加 LIMIT (max_rows+1) 下推到 DB；
+# 显式写了 LIMIT 则原样尊重、不收紧。safe=false 不自动加，须自带。
 sql_tools: []
 # 示例:
 # sql_tools:
