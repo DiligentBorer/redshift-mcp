@@ -171,7 +171,7 @@ plugins/error_api/ (独立可安装包 redshift-mcp-error-api，SQL 由插件自
    - **显式拒绝任何 `SELECT INTO`**（含 `INTO TEMP` / `INTO TEMPORARY` / `#tmp` 形式）—— 用 `find_all(exp.Into)` 递归扫整个 AST，子查询里的 INTO 也抓得到
    - `ast.find_all(exp.Table)` 收集全部表引用；**先剔除 CTE 别名**（用 `find_all(exp.CTE)` 提取），再要求剩余表全部 `schema.table` 形式且在白名单
    - 通过后用 `sql_guard.apply_row_cap` 改写 AST：顶层无 `LIMIT` 时追加 `max_rows + 1`；已有 `LIMIT` 则按 `min(已有, max_rows + 1)` 收紧；**OFFSET 保留不动**（属用户分页意图）
-   - 最后由 `db.query_sql(capped_sql, max_rows=...)` 执行。**INFO 级日志只含 `rows= truncated= elapsed_ms=` 结构化字段**；完整 SQL 文本走 DEBUG 级（避免 LLM 写 `WHERE email='...'` 时 PII 进 INFO 日志）
+   - 最后由 `db.query_sql(capped_sql, max_rows=...)` 执行。**INFO 级日志只含 `rows= truncated= elapsed_ms=` 结构化字段**；完整 SQL 文本走独立的 `sql_audit` 通道（`sql_audit_logger.info("SQL: ...")`，默认 `sql_audit_level=WARNING` 时被过滤掉、切到 INFO 才输出，详见上文「SQL 审计独立通道」段；避免 LLM 写 `WHERE email='...'` 时 PII 进运行日志）
 
 ### 关键约束 / 易踩的坑
 
@@ -212,7 +212,8 @@ plugins/error_api/ (独立可安装包 redshift-mcp-error-api，SQL 由插件自
 
 `register_sql_tools(ctx)` 读 `config.sql_tools`，为每条声明**动态构造一个带正确 `__signature__` + `__annotations__` 的函数**再 `mcp.add_tool` —— FastMCP 据签名推断 inputSchema（`str`→string、`int`→integer、`typing.Literal[*enum]`→enum、`Annotated[T, Field(description=...)]`→带描述）。**FastMCP 调用前用 pydantic 按 schema 校验入参**，所以工具体只需补 `date` 的 `strptime` 格式校验；执行走 `db.execute(sql, bind_dict, max_rows=...)`（命名占位符）。
 
-- **安全闸门**：`SqlToolSpec.safe` 默认 `True` —— 注册时把 SQL（`%(name)s` 占位符先用正则替换成字面量 `1`，否则 sqlglot 解析不了）过 `sql_guard.assert_read_only`，要求单条只读查询；不通过则**跳过该工具 + 记 error**（不搞崩 server）。`safe: false` 关闭。闸门**只校验只读、不强制白名单、不自动加 LIMIT**（运维须自带 LIMIT）。
+- **安全闸门**：`SqlToolSpec.safe` 默认 `True` —— 注册时把 SQL（`%(name)s` 占位符先用正则替换成字面量 `1`，否则 sqlglot 解析不了）过 `sql_guard.assert_read_only`，要求单条只读查询；不通过则**跳过该工具 + 记 error**（不搞崩 server）。`safe: false` 关闭。闸门**只校验只读、不强制白名单**。
+- **LIMIT 自动下推（仅 `safe=True`）**：注册期复用闸门产出的 AST 判断顶层是否有 LIMIT —— **缺则文本追加 `LIMIT (effective_max+1)`**（`effective_max = spec.max_rows or query.max_rows`）下推到 DB、记一条 info；**显式写了 LIMIT 则原样尊重、不收紧**。因 SQL 带 `%(name)s` 占位符不能复用 `apply_row_cap`（AST `.sql()` 序列化会规整原文、丢占位符），故用 `_append_limit`（另起一行拼 LIMIT、去尾部 `;`、不碰原文，对行注释结尾安全）。`safe: false` 不解析、不自动加 LIMIT（运维自负，须自带）。
 - `sql_guard.assert_read_only(sql)` 是从 `validate_select_only` 抽出的只读校验（无白名单），run_sql 与 sql_tools 共用。
 - 重名保护：注册前查 `_tool_manager._tools`，与核心三件套/插件工具/先前声明式工具撞名 → warn 跳过、不覆盖。
 - 参数名/工具名必须是合法标识符且不以 `_` 开头（pydantic validator 拦截）；required 参数自动排前以满足 `Signature`。

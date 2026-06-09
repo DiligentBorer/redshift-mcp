@@ -106,8 +106,9 @@ sudo systemctl restart redshift-mcp
 ### 声明式 SQL 工具（零代码）+ 配置拆分
 
 简单 SQL 不必写 Python 插件，直接在 `config.yaml` 的 `sql_tools:` 段声明即可（详见 README「插件系统」），
-启动 `journalctl` 会出现 `声明式 SQL 工具已注册: <name>`。声明式工具默认有只读安全闸门（`safe: true`），
-**但不自动加 LIMIT，SQL 务必自带 LIMIT**。
+启动 `journalctl` 会出现 `声明式 SQL 工具已注册: <name>`。声明式工具默认有只读安全闸门（`safe: true`）；
+**LIMIT 可写可不写**——顶层缺 LIMIT 时自动追加 `LIMIT (max_rows+1)` 下推到 DB（journalctl 会记一条
+`顶层无 LIMIT，已自动追加 LIMIT N`），显式写了则原样尊重。
 
 条目多时可拆分：主 `config.yaml` 写 `include: ["conf.d/*.yaml"]`（glob 相对配置目录，即
 `/etc/redshift-mcp/conf.d/`），把 `sql_tools` / `tables` 拆到片段；片段里 `sql_file: ../queries/x.sql`

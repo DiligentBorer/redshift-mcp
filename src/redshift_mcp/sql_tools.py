@@ -6,6 +6,10 @@
 
 安全闸门：``spec.safe``（默认 True）在注册时把 SQL（占位符替换成中性字面量）过
 ``sql_guard.assert_read_only`` —— 要求单条只读查询，挡住运维误配的 DML/DDL/多语句。
+
+LIMIT 自动下推（仅 ``safe=True``）：复用闸门产出的 AST 判断顶层是否有 LIMIT —— 缺则
+注册期用 ``_append_limit`` 文本追加 ``LIMIT (max_rows+1)`` 下推到 DB（避免大结果集全量
+拉回内存）；显式写了 LIMIT 则原样尊重、不收紧。
 """
 from __future__ import annotations
 
@@ -34,6 +38,25 @@ _PLACEHOLDER = re.compile(r"%\([A-Za-z_]\w*\)s")
 _POK = inspect.Parameter.POSITIONAL_OR_KEYWORD
 
 
+def _append_limit(sql: str, cap: int) -> str:
+    """在 SQL 末尾另起一行追加 ``LIMIT cap``，返回新 SQL（不碰原文其余部分）。
+
+    - ``cap`` 是 server 侧受控整数（config ``max_rows`` 经 ``ge=1`` 校验），直接内联
+      字面量、无注入面，无需走 bind 参数（避免与用户参数名冲突）。
+    - **另起一行**是关键：原 SQL 若以 ``-- 行注释`` 结尾，LIMIT 落在新行不会被吞掉。
+    - 去掉尾部空白与可能的结尾 ``;``（``assert_read_only`` 已保证单条语句，安全）。
+
+    仅在调用方确认顶层无 LIMIT 时调用 —— 此分支追加的 LIMIT 与 ``apply_row_cap`` 的
+    「顶层无 LIMIT 则追加 cap」一致（UNION / ORDER BY 顶层追加同样绑定到整个查询）。
+    **但两者对「已有 LIMIT」的策略不同**：``apply_row_cap``（run_sql）会收紧到
+    ``min(已有, cap)``；声明式工具显式写了 LIMIT 时本函数不被调用、原样尊重不收紧。
+    """
+    stripped = sql.rstrip()
+    if stripped.endswith(";"):
+        stripped = stripped[:-1].rstrip()
+    return f"{stripped}\nLIMIT {cap}"
+
+
 def register_sql_tools(ctx: PluginContext) -> list[str]:
     """把 ``ctx.config.sql_tools`` 里的声明逐条注册成 MCP 工具，返回成功注册的工具名列表。
 
@@ -45,6 +68,9 @@ def register_sql_tools(ctx: PluginContext) -> list[str]:
         if spec.name in ctx.mcp._tool_manager._tools:
             logger.warning("声明式 SQL 工具名与已注册工具冲突，跳过: %s", spec.name)
             continue
+        effective_max = spec.max_rows or ctx.config.query.max_rows
+        # 默认执行原始带占位符 SQL；safe=True 且顶层缺 LIMIT 时下面会替换成追加版。
+        capped_sql = spec.sql
         if spec.safe:
             try:
                 # 占位符先替换成中性整数字面量，sqlglot 才能解析（执行仍用原始带占位符 SQL）。
@@ -56,16 +82,18 @@ def register_sql_tools(ctx: PluginContext) -> list[str]:
                     spec.name, exc,
                 )
                 continue
-            # 闸门不自动加 LIMIT；顶层缺 LIMIT 时大表会被全量拉回内存再截断 →
-            # 记 warn 把隐患显性化（不阻断注册，max_rows 仍会在拉回后截断）。
+            # 顶层缺 LIMIT → 自动追加 LIMIT (max_rows + 1) 下推到 DB，避免大结果集
+            # 全量拉回内存再截断；显式写了 LIMIT 则原样尊重（不收紧）。
             if ast.args.get("limit") is None:
-                logger.warning(
-                    "声明式 SQL 工具 %s 的 SQL 顶层无 LIMIT；大结果集会被全量拉回内存"
-                    "后再按 max_rows 截断，建议在 SQL 里自带 LIMIT。",
-                    spec.name,
+                cap = effective_max + 1
+                capped_sql = _append_limit(spec.sql, cap)
+                logger.info(
+                    "声明式 SQL 工具 %s 顶层无 LIMIT，已自动追加 LIMIT %d 下推到 DB。",
+                    spec.name, cap,
                 )
         ctx.mcp.add_tool(
-            _build_tool(spec, ctx), name=spec.name, description=spec.description
+            _build_tool(spec, ctx, capped_sql, effective_max),
+            name=spec.name, description=spec.description,
         )
         registered.append(spec.name)
         logger.info(
@@ -80,8 +108,18 @@ def register_sql_tools(ctx: PluginContext) -> list[str]:
     return registered
 
 
-def _build_tool(spec: SqlToolSpec, ctx: PluginContext) -> Callable[..., dict[str, Any]]:
-    """据 spec 动态构造一个带正确 ``__signature__`` 的工具函数。"""
+def _build_tool(
+    spec: SqlToolSpec,
+    ctx: PluginContext,
+    capped_sql: str,
+    effective_max: int,
+) -> Callable[..., dict[str, Any]]:
+    """据 spec 动态构造一个带正确 ``__signature__`` 的工具函数。
+
+    ``capped_sql`` 是注册期预生成的执行 SQL（顶层缺 LIMIT 时已追加 ``LIMIT
+    effective_max+1``，否则即 ``spec.sql``）；``effective_max`` 是该工具的有效行上限
+    （``spec.max_rows or config.query.max_rows``），用于客户端侧截断判断。
+    """
     log = logger.getChild(spec.name)
 
     # required 参数排前（Signature 要求有默认值的参数在后）；MCP 按 keyword 调用，顺序无碍。
@@ -120,10 +158,8 @@ def _build_tool(spec: SqlToolSpec, ctx: PluginContext) -> Callable[..., dict[str
         rid = ctx.request_id_var.get()
         try:
             # 阻塞 DB 调用走 db.aexecute（to_thread），不阻塞事件循环。
-            return await db.aexecute(
-                spec.sql, bind,
-                max_rows=spec.max_rows or ctx.config.query.max_rows,
-            )
+            # 执行用注册期预生成的 capped_sql（可能已追加 LIMIT），行截断用 effective_max。
+            return await db.aexecute(capped_sql, bind, max_rows=effective_max)
         except ctx.db_runtime_errors as exc:
             log.exception("声明式 SQL 工具执行失败 tool=%s", spec.name)
             raise RuntimeError(
