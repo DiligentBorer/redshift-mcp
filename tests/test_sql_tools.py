@@ -167,19 +167,70 @@ async def test_optional_int_enum_params_are_nullable(monkeypatch) -> None:
     assert captured["params"] == {"n": None, "c": None}
 
 
-def test_missing_limit_warns(caplog) -> None:
-    """M3：safe=True 且 SQL 顶层无 LIMIT → 记一条 warn（不阻断注册）。"""
+async def test_missing_limit_auto_appended(monkeypatch, caplog) -> None:
+    """safe=True 且顶层无 LIMIT → 自动追加 LIMIT (effective_max+1) 下推、记 info。"""
+    captured = {}
+    monkeypatch.setattr(db, "execute",
+                        lambda sql, params=None, *, max_rows: captured.update(sql=sql, max_rows=max_rows) or
+                        {"count": 0, "truncated": False, "columns": [], "rows": []})
     tools = [{
         "name": "nolimit",
         "description": "无 LIMIT",
         "sql": "SELECT country FROM analytics.events WHERE country = %(c)s",
         "params": [{"name": "c", "type": "string"}],
     }]
-    ctx = _ctx(tools)
-    with caplog.at_level(logging.WARNING, logger="redshift_mcp.plugins.sql_tools"):
+    ctx = _ctx(tools, max_rows=200)
+    with caplog.at_level(logging.INFO, logger="redshift_mcp.plugins.sql_tools"):
         registered = register_sql_tools(ctx)
     assert registered == ["nolimit"]                        # 仍注册成功
-    assert "无 LIMIT" in caplog.text or "LIMIT" in caplog.text
+    assert "自动追加 LIMIT 201" in caplog.text               # effective_max + 1
+    await _fn(ctx, "nolimit")(c="US")
+    # 执行 SQL 末尾追加了 LIMIT 201（占位符 %(c)s 原样保留，未被规整）
+    assert captured["sql"].endswith("\nLIMIT 201")
+    assert "%(c)s" in captured["sql"]
+    assert captured["max_rows"] == 200
+
+
+async def test_explicit_limit_respected(monkeypatch) -> None:
+    """显式写了 LIMIT → 执行 SQL 原样不变（不追加、不收紧）。"""
+    captured = {}
+    monkeypatch.setattr(db, "execute",
+                        lambda sql, params=None, *, max_rows: captured.update(sql=sql) or
+                        {"count": 0, "truncated": False, "columns": [], "rows": []})
+    ctx = _ctx(_tools(), max_rows=5)            # max_rows 远小于 SQL 里的 LIMIT 100
+    register_sql_tools(ctx)
+    await _fn(ctx, "top")(date="2026-05-20", country="US")
+    assert captured["sql"] == _SELECT           # 原样尊重，不收紧到 LIMIT 6
+
+
+async def test_auto_limit_respects_max_rows_override(monkeypatch) -> None:
+    """自动追加的 LIMIT 用 spec.max_rows 覆盖后的有效上限。"""
+    captured = {}
+    monkeypatch.setattr(db, "execute",
+                        lambda sql, params=None, *, max_rows: captured.update(sql=sql) or
+                        {"count": 0, "truncated": False, "columns": [], "rows": []})
+    tools = [{
+        "name": "nolimit",
+        "description": "无 LIMIT",
+        "sql": "SELECT country FROM analytics.events WHERE country = %(c)s",
+        "params": [{"name": "c", "type": "string"}],
+        "max_rows": 5,
+    }]
+    ctx = _ctx(tools, max_rows=100)             # 全局 100，spec 覆盖为 5
+    register_sql_tools(ctx)
+    await _fn(ctx, "nolimit")(c="US")
+    assert captured["sql"].endswith("\nLIMIT 6")    # spec.max_rows(5) + 1
+
+
+def test_auto_appended_sql_stays_valid() -> None:
+    """尾部带 ;/行注释的无 LIMIT SQL，追加后仍是合法单条只读 SELECT。"""
+    from redshift_mcp import sql_guard
+    from redshift_mcp.sql_tools import _PLACEHOLDER, _append_limit
+    raw = "SELECT country FROM analytics.events WHERE country = %(c)s  -- 尾注释\n;"
+    appended = _append_limit(raw, 101)
+    # _append_limit 去掉了结尾 ; 并另起一行追加 LIMIT；占位符替换成字面量后能被闸门解析
+    ast = sql_guard.assert_read_only(_PLACEHOLDER.sub("1", appended))
+    assert ast.args.get("limit") is not None        # LIMIT 已生效在顶层
 
 
 def test_optional_param_after_required_ok() -> None:
