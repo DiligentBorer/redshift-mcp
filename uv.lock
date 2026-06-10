@@ -5,7 +5,7 @@ requires-python = ">=3.10"
 [manifest]
 members = [
     "redshift-mcp",
-    "redshift-mcp-error-api",
+    "redshift-mcp-complex",
 ]
 
 [[package]]
@@ -816,7 +816,7 @@ wheels = [
 
 [[package]]
 name = "redshift-mcp"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
@@ -850,9 +850,9 @@ dev = [
 ]
 
 [[package]]
-name = "redshift-mcp-error-api"
-version = "0.2.0"
-source = { editable = "plugins/error_api" }
+name = "redshift-mcp-complex"
+version = "0.3.0"
+source = { editable = "plugins/complex" }
 dependencies = [
     { name = "pyyaml" },
     { name = "redshift-mcp" },

@@ -155,17 +155,15 @@ def _build_tool(
                     ) from exc
             bind[p.name] = value
 
-        rid = ctx.request_id_var.get()
-        try:
-            # 阻塞 DB 调用走 db.aexecute（to_thread），不阻塞事件循环。
-            # 执行用注册期预生成的 capped_sql（可能已追加 LIMIT），行截断用 effective_max。
-            return await db.aexecute(capped_sql, bind, max_rows=effective_max)
-        except ctx.db_runtime_errors as exc:
-            log.exception("声明式 SQL 工具执行失败 tool=%s", spec.name)
-            raise RuntimeError(
-                f"查询失败 (request_id={rid}, 详见服务端日志): "
-                f"{exc.__class__.__name__}"
-            ) from exc
+        # 阻塞 DB 调用走 db.aexecute（to_thread），不阻塞事件循环。
+        # 执行用注册期预生成的 capped_sql（可能已追加 LIMIT），行截断用 effective_max。
+        # DB 异常包装复用 ctx.db_errors（自动注入 rid + db_runtime_errors）；operation 用默认即可
+        # ——客户端错误里的工具名由 FastMCP 前缀提供。source 带 sql_tools: 前缀，进完成日志/审计便于按来源筛。
+        source = f"sql_tools:{spec.name}"
+        async with ctx.db_errors(logger=log):
+            return await db.aexecute(
+                capped_sql, bind, max_rows=effective_max, source=source
+            )
 
     _impl.__name__ = spec.name
     _impl.__doc__ = spec.description

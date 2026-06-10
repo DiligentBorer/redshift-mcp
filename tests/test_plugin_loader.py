@@ -17,22 +17,41 @@ from mcp.server.fastmcp import FastMCP
 from redshift_mcp import db, plugin
 from redshift_mcp.config import AppConfig
 from redshift_mcp.errors import DB_RUNTIME_ERRORS
-from redshift_mcp.plugin import PluginContext, load_plugins
+from redshift_mcp.plugin import PluginContext, iter_installed_plugins, load_plugins
+
+
+class _FakeDist:
+    """伪 Distribution：只暴露 iter_installed_plugins 用到的 name/version。"""
+
+    def __init__(self, name: str, version: str) -> None:
+        self.name = name
+        self.version = version
 
 
 class _FakeEP:
-    """伪 importlib.metadata.EntryPoint：只实现 load 器需要的 name/value/load()。"""
+    """伪 importlib.metadata.EntryPoint：实现 load 器需要的 name/value/load()/dist。"""
 
-    def __init__(self, name: str, value: str, loader: Callable[[], object]) -> None:
+    def __init__(
+        self,
+        name: str,
+        value: str,
+        loader: Callable[[], object],
+        dist: _FakeDist | None = None,
+    ) -> None:
         self.name = name
         self.value = value
         self._loader = loader
+        self.dist = dist
 
     def load(self) -> object:
         return self._loader()
 
 
 def _pool_unavailable():
+    raise RuntimeError("连接池未初始化")
+
+
+async def _aexecute_unavailable(*_args, **_kwargs):
     raise RuntimeError("连接池未初始化")
 
 
@@ -51,6 +70,7 @@ def _build_ctx() -> PluginContext:
         sql_audit_logger=logging.getLogger("redshift_mcp.sql_audit"),
         request_id_var=contextvars.ContextVar("rid", default="-"),
         get_pool=_pool_unavailable,
+        aexecute=_aexecute_unavailable,
     )
 
 
@@ -143,3 +163,33 @@ def test_get_pool_uninitialized_raises(monkeypatch) -> None:
     monkeypatch.setattr(db, "_pool", None)
     with pytest.raises(RuntimeError, match="连接池未初始化"):
         db.get_pool()
+
+
+def test_plugin_name_injected(monkeypatch) -> None:
+    """load_plugins 应在调 register 前把 ep.name 注入到该插件的 ctx.plugin_name。"""
+    seen: dict[str, str] = {}
+
+    def _capture_register(ctx: PluginContext) -> None:
+        seen["name"] = ctx.plugin_name
+
+    ctx = _build_ctx()
+    assert ctx.plugin_name == ""   # host 构造的共享 ctx 默认空
+    _patch_eps(monkeypatch, [_FakeEP("my_plugin", "p:r", lambda: _capture_register)])
+
+    load_plugins(ctx)
+
+    assert seen["name"] == "my_plugin"
+
+
+def test_iter_installed_plugins(monkeypatch) -> None:
+    _patch_eps(
+        monkeypatch,
+        [
+            _FakeEP("alpha", "pkg_a:register", lambda: None, _FakeDist("pkg-a", "1.2.3")),
+            _FakeEP("beta", "pkg_b:register", lambda: None, _FakeDist("pkg-b", "0.1")),
+        ],
+    )
+    assert iter_installed_plugins() == [
+        ("alpha", "pkg-a", "1.2.3"),
+        ("beta", "pkg-b", "0.1"),
+    ]

@@ -13,6 +13,24 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 logger = logging.getLogger(__name__)
 
 
+def split_table_ref(table: str) -> tuple[str, str, str]:
+    """解析 ``schema.table`` / ``database.schema.table`` → ``(catalog, schema, table)`` 小写三元组。
+
+    ``catalog`` 为空串表示未写库前缀（两段式）。格式非法（段数不为 2/3、或存在空白段）抛
+    ``ValueError``（消息**不含** ``list_tables`` 提示，由调用方按需追加）。
+
+    供 ``describe_table``（server.py）与 ``TableSpec`` 名称校验共用，保证两边「段数 + 非空 + 小写」
+    规则一致。
+    """
+    parts = table.split(".") if isinstance(table, str) else []
+    if len(parts) not in (2, 3) or any(not p.strip() for p in parts):
+        raise ValueError(
+            f"表名必须是 schema.table 或 database.schema.table 格式（各段非空）: {table!r}"
+        )
+    catalog = parts[0].lower() if len(parts) == 3 else ""
+    return catalog, parts[-2].lower(), parts[-1].lower()
+
+
 class DatabaseConfig(BaseModel):
     host: str
     port: int = 5439
@@ -81,11 +99,8 @@ class TableSpec(BaseModel):
     def _name_has_schema(cls, v: str) -> str:
         # 支持两段（schema.table）或三段（database.schema.table）。两段式在
         # AppConfig.allowed_table_names_set 归一时用 database.dbname 补全前缀。
-        parts = v.split(".") if isinstance(v, str) else []
-        if len(parts) not in (2, 3) or any(not p.strip() for p in parts):
-            raise ValueError(
-                "表名必须是 schema.table 或 database.schema.table 格式（各段非空）"
-            )
+        # 复用 split_table_ref 的「段数 + 非空」校验，与 describe_table 保持一致规则。
+        split_table_ref(v)
         return v.lower()
 
 

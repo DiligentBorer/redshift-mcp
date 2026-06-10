@@ -8,24 +8,24 @@ from __future__ import annotations
 
 import contextvars
 import logging
-from typing import Callable
+from typing import Any, Callable
 
 import pytest
 
 from redshift_mcp.config import AppConfig
 from redshift_mcp.plugin import PluginContext
-from redshift_mcp_error_api import register
+from redshift_mcp_complex import register
 
 
 @pytest.fixture(autouse=True)
-def _error_api_config(tmp_path, monkeypatch):
+def _complex_config(tmp_path, monkeypatch):
     """register 现在要求插件自有配置 —— 喂一份最小 config（含内联 SQL）让它通过。
 
     日期校验与本配置无关，只是让 ``register`` 能成功解析 SQL 并注册工具。
     """
     cfg = tmp_path / "config.yaml"
     cfg.write_text('sql: "SELECT 1"\n', encoding="utf-8")
-    monkeypatch.setenv("REDSHIFT_MCP_ERROR_API_CONFIG", str(cfg))
+    monkeypatch.setenv("REDSHIFT_MCP_COMPLEX_CONFIG", str(cfg))
 
 
 class _CapturingMCP:
@@ -41,12 +41,16 @@ class _CapturingMCP:
         return deco
 
 
-def _build_tool(get_pool: Callable = lambda: (_ for _ in ()).throw(
-    RuntimeError("连接池未初始化")
-)) -> Callable:
+async def _aexecute_boom(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    """模拟「连接池未初始化」：一被调用即抛 RuntimeError（属 db_runtime_errors）。"""
+    raise RuntimeError("连接池未初始化")
+
+
+def _build_tool(aexecute: Callable = _aexecute_boom) -> Callable:
     """构造 PluginContext 并 register，返回注册好的 query_error_api_by_date。
 
-    默认 ``get_pool`` 一被调用就抛 RuntimeError，模拟「连接池未初始化」。
+    默认 ``aexecute`` 一被调用就抛 RuntimeError，模拟「连接池未初始化」，
+    用以验证合法日期能流转过 strptime、进入 DB 访问层。
     """
     mcp = _CapturingMCP()
     cfg = AppConfig.model_validate(
@@ -62,7 +66,9 @@ def _build_tool(get_pool: Callable = lambda: (_ for _ in ()).throw(
         logger=logging.getLogger("redshift_mcp.plugins"),
         sql_audit_logger=logging.getLogger("redshift_mcp.sql_audit"),
         request_id_var=contextvars.ContextVar("rid", default="-"),
-        get_pool=get_pool,
+        get_pool=lambda: (_ for _ in ()).throw(RuntimeError("连接池未初始化")),
+        aexecute=aexecute,
+        plugin_name="complex",
     )
     register(ctx)
     return mcp.tools["query_error_api_by_date"]
@@ -92,7 +98,7 @@ async def test_invalid_dates_rejected(bad_date: str) -> None:
 async def test_valid_date_progresses_past_strptime() -> None:
     """对于格式正确的日期，strptime 不应抛错；之后流转到 DB 访问层。
 
-    这里 get_pool 抛 RuntimeError（连接池未初始化），会被 db_runtime_errors
+    这里 aexecute 抛 RuntimeError（连接池未初始化），会被 ctx.db_errors
     捕获、包成带 rid 的 RuntimeError。断言它**不是**日期错误，正是要验证的
     边界 —— 入参校验对合法日期不会短路。
     """
@@ -101,4 +107,6 @@ async def test_valid_date_progresses_past_strptime() -> None:
         await tool("2026-05-20")
     msg = str(excinfo.value)
     assert "日期格式不合法" not in msg
-    assert "查询失败" in msg
+    # ctx.db_errors 的消息形如 "complex 查询 失败 (request_id=..., 详见服务端日志): RuntimeError"
+    assert "失败" in msg
+    assert "request_id" in msg
