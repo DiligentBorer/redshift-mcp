@@ -16,7 +16,7 @@ import re
 def _example_sql() -> str:
     """读包内模板 SQL（editable/workspace 下解析到源码树，恒存在）。"""
     return (
-        importlib.resources.files("redshift_mcp_error_api")
+        importlib.resources.files("redshift_mcp_complex")
         .joinpath("queries", "error_api.example.sql")
         .read_text(encoding="utf-8")
     )

@@ -74,7 +74,7 @@ sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
   git clone <你的仓库地址> .
   uv sync --all-packages    # 自动下载 cpython-3.13；--all-packages 把主程序 + plugins/* 下
-                            # 所有自带插件（含 redshift-mcp-error-api）一并 editable 装好
+                            # 所有自带插件（含 redshift-mcp-complex）一并 editable 装好
   uv run pytest -q          # 所有测试应当通过
 '
 ```
@@ -82,7 +82,7 @@ sudo -u redshift-mcp -H bash -lc '
 ### 部署额外插件
 
 业务工具以可安装包形式分发，装进与主程序**同一个 venv** 即被 entry_points 自动发现，
-**不需要改 host 的任何配置**。自带的 `error_api` 插件随仓库 `uv sync --all-packages` 已装好；
+**不需要改 host 的任何配置**。自带的 `complex` 插件随仓库 `uv sync --all-packages` 已装好；
 要新增第三方插件，二选一：
 
 ```bash
@@ -100,7 +100,7 @@ sudo systemctl restart redshift-mcp
 启动后 `journalctl` 里会出现插件注册日志。临时禁用某个已装插件，
 在 `config.yaml` 设 `plugins.disabled: ["<name>"]` 后重启即可。
 
-> 若插件自带外部配置（如 `error_api` 的业务 SQL），见该插件 README —— 它自行从约定路径 /
+> 若插件自带外部配置（如 `complex` 的业务 SQL），见该插件 README —— 它自行从约定路径 /
 > env var 加载，未配置则启动时报错跳过该插件（不影响其余工具）。
 
 ### 声明式 SQL 工具（零代码）+ 配置拆分
@@ -148,7 +148,7 @@ query:
 
 plugins:
   enabled: true                 # false => 整体跳过插件加载
-  disabled: []                  # 已安装但想临时禁用的插件名，例: ["error_api"]
+  disabled: []                  # 已安装但想临时禁用的插件名，例: ["complex"]
 
 logging:
   level: INFO
@@ -212,8 +212,8 @@ sudo journalctl -u redshift-mcp -f --since "1 min ago"
 
 - `日志配置完成: level=INFO sql_audit_level=WARNING ... file=/var/log/redshift-mcp/redshift-mcp.log ...`
 - `Redshift 连接池就绪 (host=... statement_timeout_ms=60000 ...)`
-- `插件已加载: error_api (redshift_mcp_error_api:register)`
-- `插件加载完成，共 1 个: error_api` / `插件注册完成: ['error_api']`
+- `插件已加载: complex (redshift_mcp_complex:register)`
+- `插件加载完成，共 1 个: complex` / `插件注册完成: ['complex']`
 - `声明式 SQL 工具加载完成，共 N 个: ...` / `声明式 SQL 工具: [...]`（N=0 时为 `(无)`）
 - `启动 redshift-mcp，监听 http://127.0.0.1:8000/redshift`
 - `Uvicorn running on http://127.0.0.1:8000`
@@ -387,7 +387,7 @@ sudo systemctl restart redshift-mcp
 | 用途 | 路径 |
 | --- | --- |
 | 代码 | `/opt/redshift-mcp/` |
-| 自带插件源码（workspace 成员） | `/opt/redshift-mcp/plugins/error_api/` |
+| 自带插件源码（workspace 成员） | `/opt/redshift-mcp/plugins/complex/` |
 | 虚拟环境（uv 管理） | `/opt/redshift-mcp/.venv` |
 | Python 解释器 | `/var/lib/redshift-mcp/.local/share/uv/python/cpython-3.13.*/` |
 | 配置 | `/etc/redshift-mcp/config.yaml`（0640 root:redshift-mcp） |

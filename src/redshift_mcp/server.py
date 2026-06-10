@@ -20,13 +20,13 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from . import __version__, db, sql_guard
-from .config import AppConfig, LoggingConfig, load_config
+from .config import AppConfig, LoggingConfig, load_config, split_table_ref
 # "DB / 运行时错误"分类元组移到零依赖叶子模块 errors.py，让插件也能共享
 # （见 errors.py / plugin.py）。工具 @mcp.tool 路径用它把这类错误包装成带 rid 的
 # RuntimeError 抛给客户端，但**不**吞掉编程错误（TypeError / KeyError / sqlglot
 # 内部断言等）—— 让那些 bug 类异常原样冒泡，由 FastMCP 包成 500，便于早暴露。
 from .errors import DB_RUNTIME_ERRORS as _DB_RUNTIME_ERRORS
-from .plugin import PluginContext, load_plugins
+from .plugin import PluginContext, iter_installed_plugins, load_plugins
 from .sql_tools import register_sql_tools
 
 logger = logging.getLogger("redshift_mcp")
@@ -245,14 +245,11 @@ async def describe_table(table: str) -> dict[str, Any]:
     cfg = _get_cfg()
     # 支持 schema.table（两段）或 database.schema.table（三段）；统一归一成三段式键
     # （未写库前缀的用 cfg.database.dbname 补全），与 run_sql 闸门同一规则。
-    parts = table.split(".") if isinstance(table, str) else []
-    if len(parts) not in (2, 3) or any(not p.strip() for p in parts):
-        raise ValueError(
-            f"表名必须是 schema.table 或 database.schema.table 格式: {table!r}。"
-            f"请先调用 list_tables 查看可用表全名。"
-        )
-    catalog = parts[0] if len(parts) == 3 else ""
-    schema, tname = parts[-2].lower(), parts[-1].lower()
+    # 解析 + 格式校验复用 config.split_table_ref（与 TableSpec 校验同一规则）。
+    try:
+        catalog, schema, tname = split_table_ref(table)
+    except ValueError as exc:
+        raise ValueError(f"{exc}。请先调用 list_tables 查看可用表全名。") from exc
     table_norm = cfg.normalize_table_ref(catalog, schema, tname)
     if table_norm not in cfg.allowed_table_names():
         raise ValueError(
@@ -339,7 +336,7 @@ async def run_sql(sql: str) -> dict[str, Any]:
     capped_sql = sql_guard.apply_row_cap(ast, cfg.query.max_rows)
 
     try:
-        return await db.aquery_sql(capped_sql, max_rows=cfg.query.max_rows)
+        return await db.aexecute(capped_sql, max_rows=cfg.query.max_rows)
     except _DB_RUNTIME_ERRORS as exc:
         # 完整 traceback（带 rid）通过 filter 写到运行日志。
         # SQL 文本本身可能含 PII（WHERE 子句里的邮箱/用户名等），不进运行
@@ -407,6 +404,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="redshift-mcp",
         description="Generic Redshift MCP server (Streamable HTTP) with a plugin framework.",
+        epilog=(
+            "示例:\n"
+            "  redshift-mcp --config config.yaml   # 启动 server\n"
+            "  redshift-mcp -l                      # 列出已装插件后退出\n"
+            "  redshift-mcp --version               # 打印版本后退出\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,  # 保留 epilog 换行
+    )
+    parser.add_argument(
+        "--version",
+        "-V",
+        action="version",
+        version=f"redshift-mcp {__version__}",
     )
     parser.add_argument(
         "--config",
@@ -419,13 +429,40 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Override logging.level from the config (DEBUG/INFO/WARNING/...).",
     )
+    parser.add_argument(
+        "--list-plugins",
+        "-l",
+        action="store_true",
+        help="List installed plugins (entry-point name / distribution / version) and exit; "
+             "no config or DB needed.",
+    )
     return parser.parse_args(argv)
+
+
+def _print_installed_plugins() -> int:
+    """打印已装插件 ``ep.name / distribution / version`` 到 stdout（供 ``--list-plugins``）。
+
+    免启动：不读 config、不建连接池。运维据第一列（ep.name）往 ``plugins.disabled`` 填名禁用。
+    """
+    plugins = iter_installed_plugins()
+    if not plugins:
+        print("未发现已安装的 redshift-mcp 插件（group: redshift_mcp.plugins）。")
+        return 0
+    print("已安装的 redshift-mcp 插件（ep.name / distribution / version）：")
+    for name, dist, version in plugins:
+        print(f"  {name}\t{dist} {version}")
+    print("\n在 config.yaml 的 plugins.disabled 写入第一列名字即可禁用对应插件。")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     global _cfg
 
     args = _parse_args(argv)
+
+    # 0) --list-plugins：免启动列出已装插件后即退出（不读 config、不连 DB）。
+    if args.list_plugins:
+        return _print_installed_plugins()
 
     # 1) 先加载配置（若失败时，先用 stderr-only 的临时 logger 把错误打出来）
     logging.basicConfig(
@@ -471,10 +508,11 @@ def main(argv: list[str] | None = None) -> int:
         sql_audit_logger=sql_audit_logger,
         request_id_var=request_id_var,
         get_pool=db.get_pool,
+        aexecute=db.aexecute,
     )
     if _cfg.plugins.enabled:
         loaded = load_plugins(plugin_ctx, disabled=_cfg.plugins.disabled)
-        logger.info("插件注册完成: %s", loaded or "(无)")
+        logger.info("插件启动完成: %s", loaded or "(无)")
     else:
         logger.info("插件加载已禁用 (plugins.enabled=false)")
     sql_tools = register_sql_tools(plugin_ctx)

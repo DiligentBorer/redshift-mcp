@@ -1,8 +1,10 @@
-"""Error API IP 统计查询的执行逻辑。
+"""Error API IP 统计查询的执行逻辑 —— **「插件自管连接池执行」的备选参考实现**。
 
-SQL 不在此硬编码，也不在 import 期读包内文件 —— 它由插件自有 ``config.yaml`` 提供（解析优先级
-``env var > 包内约定路径``，见 ``_config.py``），在 ``register`` 启动时解析一次后透传进来。
-模板见仓库 ``config.example.yaml`` / ``queries/error_api.example.sql``，仅在 git、不进生产 wheel。
+当前 ``register()`` 走 host 的 ``ctx.aexecute``（推荐路径，复用 db.execute 的执行 / 计时 / 截断 /
+审计）；**本函数未被接线**，保留下来给后续开发者对照「如何用 ``ctx.get_pool()`` 低层自管执行」。
+
+SQL 由插件自有 ``config.yaml`` 提供（解析优先级 ``env var > 包内约定路径``，见 ``_config.py``），
+在 ``register`` 启动时解析一次后透传进来；模板见 ``config.example.yaml`` / ``queries/*.example.sql``。
 """
 from __future__ import annotations
 
@@ -21,11 +23,11 @@ def run_query(
     max_rows: int,
     logger: logging.Logger,
 ) -> dict[str, Any]:
-    """用宿主的共享连接池对指定 event_date 跑一次 Error API IP 统计查询。
+    """用宿主的共享连接池对指定 event_date 跑一次 Error API IP 统计查询（备选参考、未接线）。
 
     ``sql`` 由调用方传入（来自插件 config，命名占位符 ``%(event_date)s`` / ``%(limit)s``）。
     服务端用 ``LIMIT %(limit)s``（= max_rows + 1）限制结果规模；当返回行数大于 ``max_rows`` 时把
-    ``truncated`` 标为 ``True``。
+    ``truncated`` 标为 ``True``。``logger`` 名已带插件身份，故消息不再前缀插件自名。
     """
     t0 = time.monotonic()
     with pool.connection() as conn:
@@ -39,12 +41,11 @@ def run_query(
         rows = rows[:max_rows]
 
     logger.info(
-        "error_api 查询完成 event_date=%s rows=%d truncated=%s elapsed_ms=%d",
+        "查询完成 event_date=%s rows=%d truncated=%s elapsed_ms=%d",
         event_date, len(rows), truncated, elapsed_ms,
     )
 
     return {
-        "date": event_date,
         "count": len(rows),
         "truncated": truncated,
         "rows": rows,

@@ -1,6 +1,6 @@
 [project]
 name = "redshift-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "通用 Redshift MCP Server（Streamable HTTP）+ 插件框架：三件套通用查询工具 + entry_points / 声明式 SQL 扩展"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -33,6 +33,7 @@ def _ctx(tools: list[dict], *, max_rows: int = 100) -> PluginContext:
         sql_audit_logger=logging.getLogger("redshift_mcp.sql_audit"),
         request_id_var=contextvars.ContextVar("rid", default="-"),
         get_pool=lambda: (_ for _ in ()).throw(RuntimeError("连接池未初始化")),
+        aexecute=db.aexecute,
     )
 
 
@@ -75,7 +76,7 @@ def test_register_and_input_schema() -> None:
 async def test_valid_call_binds_named_params(monkeypatch) -> None:
     captured = {}
 
-    def fake_execute(sql, params=None, *, max_rows):
+    def fake_execute(sql, params=None, *, max_rows, source=None):
         captured.update(sql=sql, params=params, max_rows=max_rows)
         return {"count": 0, "truncated": False, "columns": [], "rows": []}
 
@@ -92,7 +93,7 @@ async def test_valid_call_binds_named_params(monkeypatch) -> None:
 async def test_max_rows_override(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(db, "execute",
-                        lambda sql, params=None, *, max_rows: captured.update(max_rows=max_rows) or
+                        lambda sql, params=None, *, max_rows, source=None: captured.update(max_rows=max_rows) or
                         {"count": 0, "truncated": False, "columns": [], "rows": []})
     ctx = _ctx(_tools(max_rows=5), max_rows=100)
     register_sql_tools(ctx)
@@ -119,7 +120,11 @@ async def test_db_error_wrapped_with_rid(monkeypatch) -> None:
     with pytest.raises(RuntimeError) as exc:
         await _fn(ctx, "top")(date="2026-05-20", country="US")
     msg = str(exc.value)
-    assert "查询失败" in msg and "request_id=" in msg
+    # 直接调工具函数（绕过 FastMCP 的 "Error executing tool <name>:" 前缀）→ 看到裸 RuntimeError，
+    # operation 用中性默认「查询」，消息形如 "查询 失败 (request_id=..., 详见服务端日志): RuntimeError"。
+    # 不应再泄漏内部 source 前缀 "sql_tools:"（客户端侧的工具名由 FastMCP 前缀提供）。
+    assert "查询 失败" in msg and "request_id=" in msg
+    assert "sql_tools:" not in msg
     assert "日期格式不合法" not in msg
 
 
@@ -143,7 +148,7 @@ async def test_optional_int_enum_params_are_nullable(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(
         db, "execute",
-        lambda sql, params=None, *, max_rows: captured.update(params=params) or
+        lambda sql, params=None, *, max_rows, source=None: captured.update(params=params) or
         {"count": 0, "truncated": False, "columns": [], "rows": []},
     )
     tools = [{
@@ -171,7 +176,7 @@ async def test_missing_limit_auto_appended(monkeypatch, caplog) -> None:
     """safe=True 且顶层无 LIMIT → 自动追加 LIMIT (effective_max+1) 下推、记 info。"""
     captured = {}
     monkeypatch.setattr(db, "execute",
-                        lambda sql, params=None, *, max_rows: captured.update(sql=sql, max_rows=max_rows) or
+                        lambda sql, params=None, *, max_rows, source=None: captured.update(sql=sql, max_rows=max_rows) or
                         {"count": 0, "truncated": False, "columns": [], "rows": []})
     tools = [{
         "name": "nolimit",
@@ -195,7 +200,7 @@ async def test_explicit_limit_respected(monkeypatch) -> None:
     """显式写了 LIMIT → 执行 SQL 原样不变（不追加、不收紧）。"""
     captured = {}
     monkeypatch.setattr(db, "execute",
-                        lambda sql, params=None, *, max_rows: captured.update(sql=sql) or
+                        lambda sql, params=None, *, max_rows, source=None: captured.update(sql=sql) or
                         {"count": 0, "truncated": False, "columns": [], "rows": []})
     ctx = _ctx(_tools(), max_rows=5)            # max_rows 远小于 SQL 里的 LIMIT 100
     register_sql_tools(ctx)
@@ -207,7 +212,7 @@ async def test_auto_limit_respects_max_rows_override(monkeypatch) -> None:
     """自动追加的 LIMIT 用 spec.max_rows 覆盖后的有效上限。"""
     captured = {}
     monkeypatch.setattr(db, "execute",
-                        lambda sql, params=None, *, max_rows: captured.update(sql=sql) or
+                        lambda sql, params=None, *, max_rows, source=None: captured.update(sql=sql) or
                         {"count": 0, "truncated": False, "columns": [], "rows": []})
     tools = [{
         "name": "nolimit",

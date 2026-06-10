@@ -16,7 +16,30 @@ from redshift_mcp.config import (
     SqlToolParam,
     SqlToolSpec,
     load_config,
+    split_table_ref,
 )
+
+
+@pytest.mark.parametrize(
+    "ref, expected",
+    [
+        ("schema.table", ("", "schema", "table")),
+        ("db.schema.table", ("db", "schema", "table")),
+        ("Analytics.Events", ("", "analytics", "events")),       # 归一小写
+        ("DB.Schema.Table", ("db", "schema", "table")),
+    ],
+)
+def test_split_table_ref_valid(ref, expected) -> None:
+    assert split_table_ref(ref) == expected
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["table", "a.b.c.d", "schema.", ".table", "a..c", "", "  "],
+)
+def test_split_table_ref_invalid(bad) -> None:
+    with pytest.raises(ValueError):
+        split_table_ref(bad)
 
 
 # ===== 声明式 SQL 工具 schema 校验 =====

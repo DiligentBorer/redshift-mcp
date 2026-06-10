@@ -93,6 +93,25 @@ def get_pool() -> ConnectionPool:
 # ---- 通用查询能力（list_tables / describe_table / run_sql）----
 
 
+def _select(
+    sql: str,
+    params: tuple[Any, ...] | dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """借共享连接执行一条 SELECT，返回 ``(rows, column_names)``。
+
+    仅收拢「取池 → 借连接 → 游标 → ``execute`` → ``fetchall`` + 取列名」这段重复样板，
+    供 ``execute`` / ``fetch_table_columns`` / ``fetch_table_info`` 共用；**不做**计时 / 截断 /
+    日志 / 审计 / 安全校验（那些在 ``execute`` 或各调用方）。``column_names`` 必须在游标上下文内取
+    （连接归还后 ``cur.description`` 失效），故一并返回，不需要列名的调用方丢弃即可。
+    """
+    pool = get_pool()
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        columns = [d.name for d in cur.description] if cur.description else []
+    return rows, columns
+
+
 def fetch_table_columns(schema: str, table: str) -> list[dict[str, Any]]:
     """从 Redshift 拉取指定表的列定义。
 
@@ -100,8 +119,6 @@ def fetch_table_columns(schema: str, table: str) -> list[dict[str, Any]]:
     不需要在表所在的 schema 下也能查）。返回字段固定为
     ``{name, type, ordinal_position}``，方便上层叠加 config 里的说明。
     """
-    pool = get_pool()
-
     # Redshift SVV_COLUMNS 实际列名为 table_schema（不是 schema_name），
     # 跑错列名会立刻抛 UndefinedColumn。
     # 同时 SVV_COLUMNS 跨 database 可见 —— 必须 table_catalog 过滤当前 database，
@@ -115,10 +132,8 @@ def fetch_table_columns(schema: str, table: str) -> list[dict[str, Any]]:
         "  AND table_schema = %s AND table_name = %s "
         "ORDER BY ordinal_position"
     )
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, (schema, table))
-            return cur.fetchall()
+    rows, _ = _select(sql, (schema, table))
+    return rows
 
 
 def fetch_table_info(schema: str, table: str) -> dict[str, Any] | None:
@@ -129,63 +144,20 @@ def fetch_table_info(schema: str, table: str) -> dict[str, Any] | None:
     级别日志后返回 None —— 让 ``describe_table`` 不因此整体失败，
     ``row_count_estimate`` 字段自然不出现在返回里。
     """
-    pool = get_pool()
-
     sql = (
         "SELECT tbl_rows AS row_count_estimate, size AS mb_size "
         "FROM SVV_TABLE_INFO "
         "WHERE \"schema\" = %s AND \"table\" = %s"
     )
     try:
-        with pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, (schema, table))
-                rows = cur.fetchall()
-        return rows[0] if rows else None
+        rows, _ = _select(sql, (schema, table))
     except psycopg.Error as exc:
         logger.info(
             "fetch_table_info 跳过 schema=%s table=%s err=%s",
             schema, table, exc.__class__.__name__,
         )
         return None
-
-
-def query_sql(sql: str, *, max_rows: int) -> dict[str, Any]:
-    """通用 SELECT 执行入口。
-
-    **传入的 ``sql`` 必须已经过 ``sql_guard.validate_select_only`` 校验，
-    且建议用 ``sql_guard.apply_row_cap`` 包过 LIMIT 才传进来**；本函数只负责
-    实际执行与组装返回值，不做 SQL 安全校验。
-    """
-    pool = get_pool()
-
-    t0 = time.monotonic()
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql)
-            rows = cur.fetchall()
-            columns = [d.name for d in cur.description] if cur.description else []
-    elapsed_ms = int((time.monotonic() - t0) * 1000)
-
-    truncated = len(rows) > max_rows
-    if truncated:
-        rows = rows[:max_rows]
-
-    # INFO 级别只记结构性字段，避免 LLM 写的 WHERE 子句里的 PII（邮箱 /
-    # 用户名 / 手机号）泄漏到运行日志。完整 SQL 走独立的 sql_audit logger，
-    # 由 LoggingConfig.sql_audit_level / sql_audit_file 独立控制。
-    logger.info(
-        "run_sql 完成 rows=%d truncated=%s elapsed_ms=%d",
-        len(rows), truncated, elapsed_ms,
-    )
-    sql_audit_logger.info("SQL: %s", sql)
-
-    return {
-        "count": len(rows),
-        "truncated": truncated,
-        "columns": columns,
-        "rows": rows,
-    }
+    return rows[0] if rows else None
 
 
 def execute(
@@ -193,33 +165,43 @@ def execute(
     params: tuple[Any, ...] | dict[str, Any] | None = None,
     *,
     max_rows: int,
+    source: str | None = None,
 ) -> dict[str, Any]:
-    """通用参数化 SELECT 执行入口（供插件复用）。
+    """**唯一**的通用 SELECT 执行入口（``run_sql`` / 声明式 sql_tools / 插件共用）。
 
-    纯机制：取池 → 执行（可带参数）→ fetchall → 计时 → 行数截断 → INFO 日志，
+    取池 → 执行（可带参数）→ fetchall → 计时 → 行截断 → 结构化完成日志 + 独立 SQL 审计 →
     返回 ``{count, truncated, columns, rows}``。
 
-    **不做 SQL 安全校验**（调用方自负安全），也**不打 sql_audit**：插件的 SQL
-    是硬编码的、没有用户输入拼接的 PII 注入面，区别于 ``run_sql`` 走的
-    ``query_sql``。需要审计的插件可自行用 ``sql_audit_logger`` 记录。
+    **传入的 ``sql`` 必须已经过只读校验**（``run_sql`` 走 ``sql_guard.validate_select_only``
+    + ``apply_row_cap``；声明式工具 / 插件走各自路径）；本函数只负责执行与组装返回值，
+    不做 SQL 安全校验。``run_sql`` 不带 bind 参数时 ``params=None`` 即可。
+
+    审计：完整 SQL **模板** + bind 参数经独立的 ``sql_audit_logger`` 输出（默认
+    ``sql_audit_level=WARNING`` 时被过滤，切 INFO 才落盘）。``source`` 标识查询来源
+    （``None`` → ``host``；声明式工具 → ``sql_tools:<名>``；插件 → ``plugin:<名>``），
+    同时进完成日志与审计行，便于运维按来源 ``grep source=...``。
+
+    PII 安全：被 log 的 ``sql`` 始终是**参数化之前的占位符模板**（``cur.execute(sql, params)``
+    把文本与参数分开传，绑定后的真实值只在 psycopg 内部 / wire 层、不回写进 ``sql``）；LLM
+    给的参数值可能含 PII，**只随审计通道（受 level 闸住）记录、绝不进主 logger**。
     """
-    pool = get_pool()
+    src = source or "host"
+
     t0 = time.monotonic()
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            rows = cur.fetchall()
-            columns = [d.name for d in cur.description] if cur.description else []
+    rows, columns = _select(sql, params)
     elapsed_ms = int((time.monotonic() - t0) * 1000)
 
     truncated = len(rows) > max_rows
     if truncated:
         rows = rows[:max_rows]
 
+    # INFO 级别只记结构性字段（含 source），避免 PII 泄漏到运行日志。完整 SQL 模板 +
+    # bind 参数走独立的 sql_audit logger，由 LoggingConfig.sql_audit_level / sql_audit_file 控制。
     logger.info(
-        "execute 完成 rows=%d truncated=%s elapsed_ms=%d",
-        len(rows), truncated, elapsed_ms,
+        "查询完成 source=%s rows=%d truncated=%s elapsed_ms=%d",
+        src, len(rows), truncated, elapsed_ms,
     )
+    sql_audit_logger.info("SQL [source=%s]: %s params: %s", src, sql, params)
 
     return {
         "count": len(rows),
@@ -239,19 +221,19 @@ def execute(
 # 同步实现保持不变，供这些封装与（如有）同步调用方共用。
 
 
-async def aquery_sql(sql: str, *, max_rows: int) -> dict[str, Any]:
-    """``query_sql`` 的 async 封装（阻塞执行丢到 worker 线程）。"""
-    return await anyio.to_thread.run_sync(partial(query_sql, sql, max_rows=max_rows))
-
-
 async def aexecute(
     sql: str,
     params: tuple[Any, ...] | dict[str, Any] | None = None,
     *,
     max_rows: int,
+    source: str | None = None,
 ) -> dict[str, Any]:
-    """``execute`` 的 async 封装（阻塞执行丢到 worker 线程）。"""
-    return await anyio.to_thread.run_sync(partial(execute, sql, params, max_rows=max_rows))
+    """``execute`` 的 async 封装（阻塞执行丢到 worker 线程）。
+
+    **唯一**的异步 SELECT 执行入口：``run_sql`` / 声明式 sql_tools / 插件（经 ``ctx.aexecute``）共用。"""
+    return await anyio.to_thread.run_sync(
+        partial(execute, sql, params, max_rows=max_rows, source=source)
+    )
 
 
 async def afetch_table_columns(schema: str, table: str) -> list[dict[str, Any]]:

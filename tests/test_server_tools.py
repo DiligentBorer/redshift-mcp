@@ -126,15 +126,17 @@ async def test_run_sql_rejects_empty(cfg_with_whitelist) -> None:
 
 
 async def test_run_sql_executes_on_valid(cfg_with_whitelist, monkeypatch) -> None:
-    """合法 SQL 应进入到 db.query_sql；这里 mock 该函数验证调用链。"""
+    """合法 SQL 应进入到 db.execute（run_sql 走 db.aexecute → execute）；mock 验证调用链。"""
     captured = {}
 
-    def fake_query_sql(sql, *, max_rows):
+    def fake_execute(sql, params=None, *, max_rows, source=None):
         captured["sql"] = sql
+        captured["params"] = params
         captured["max_rows"] = max_rows
+        captured["source"] = source
         return {"count": 0, "truncated": False, "columns": [], "rows": []}
 
-    monkeypatch.setattr(server.db, "query_sql", fake_query_sql)
+    monkeypatch.setattr(server.db, "execute", fake_execute)
 
     result = await server.run_sql("SELECT ip FROM analytics.events WHERE event_date='2026-05-20'")
     assert result == {"count": 0, "truncated": False, "columns": [], "rows": []}

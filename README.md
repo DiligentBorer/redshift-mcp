@@ -4,7 +4,7 @@
 
 ## 工具
 
-核心暴露 **3 个通用查询工具**；业务工具通过两种插件机制提供 —— ① 自带的 `redshift-mcp-error-api` 这类 **Python 插件**（entry_points 装进同一 venv 即自动发现），② 直接在 `config.yaml` 的 `sql_tools:` 段**声明式注册 SQL 工具**（零代码）。详见下方「[插件系统](#插件系统)」。
+核心暴露 **3 个通用查询工具**；业务工具通过两种插件机制提供 —— ① 自带的 `redshift-mcp-complex` 这类 **Python 插件**（entry_points 装进同一 venv 即自动发现），② 直接在 `config.yaml` 的 `sql_tools:` 段**声明式注册 SQL 工具**（零代码）。详见下方「[插件系统](#插件系统)」。
 
 ### 通用查询三件套（受 `config.yaml` 白名单约束）
 
@@ -16,11 +16,11 @@
   解析 AST 强制校验**：只允许单条 SELECT、所有引用表 schema-qualified 且在白名单内、
   自动追加 `LIMIT max_rows + 1`。任何 DML / DDL / SET / 多语句一律拒绝。
 
-### 业务插件工具（随仓库自带 `redshift-mcp-error-api`）
+### 业务插件工具（随仓库自带 `redshift-mcp-complex`）
 
 - **`query_error_api_by_date(date: str)`** —— `date` 为 `YYYY-MM-DD` 格式，返回
   `{date, count, truncated, rows: [{client_ip, device_count}, ...]}`，按 `device_count` 降序。
-  由插件包 `redshift-mcp-error-api`（`plugins/error_api/`）提供，**SQL 由插件自有 `config.yaml`
+  由插件包 `redshift-mcp-complex`（`plugins/complex/`）提供，**SQL 由插件自有 `config.yaml`
   提供**（插件按 `env var > 包内约定路径` 自行加载，见 `_config.py`；仓库只提交模板
   `queries/error_api.example.sql`），命名占位符 `%(event_date)s` / `%(limit)s`。不受表白名单约束。
   逻辑示意（实际文件里 `LIKE` 模式的字面 `%` 都写成 `%%` 以避开 psycopg3 占位符扫描）：
@@ -42,6 +42,10 @@ cp config.example.yaml config.yaml
 ```bash
 uv run redshift-mcp --config config.yaml
 # server 监听 http://0.0.0.0:8000/redshift（可配置）
+
+# 免启动列出已安装插件（ep.name / distribution / version）——查 plugins.disabled 该填什么名
+uv run redshift-mcp --list-plugins      # 简写 -l
+uv run redshift-mcp --version           # 打印版本；--help / -h 看全部参数
 ```
 
 所有请求必须带：
@@ -80,7 +84,7 @@ Authorization: Bearer <server.auth_token>
 
 核心包 `src/redshift_mcp/` 不含任何业务 SQL。扩展工具有**两种机制**：
 
-- **① Python 插件（entry_points）** —— 写代码的全功能插件，独立可安装包，装进同一 venv 即自动发现（**不需要改 host 任何配置**）。**插件私有配置内聚在插件内部**：插件如需外部配置（如自带 `error_api` 的业务 SQL），自带一个 `config.yaml`（结构与 host 同构）并自行加载（`env var > 包内约定路径`），host `config.yaml` 不承载插件配置。
+- **① Python 插件（entry_points）** —— 写代码的全功能插件，独立可安装包，装进同一 venv 即自动发现（**不需要改 host 任何配置**）。**插件私有配置内聚在插件内部**：插件如需外部配置（如自带 `complex` 的业务 SQL），自带一个 `config.yaml`（结构与 host 同构）并自行加载（`env var > 包内约定路径`），host `config.yaml` 不承载插件配置。
 - **② 声明式 SQL 工具（零代码）** —— 直接在 `config.yaml` 的 `sql_tools:` 里声明 `{name, description, sql, params}`，启动自动注册成 MCP 工具。适合简单 SQL。
 
 ### 方式一：写一个 Python 插件
@@ -99,14 +103,20 @@ Authorization: Bearer <server.auth_token>
 
    def register(ctx: PluginContext) -> None:
        @ctx.mcp.tool()
-       def my_tool(arg: str) -> dict:
+       async def my_tool(arg: str) -> dict:
            """工具说明（FastMCP 据此 + 类型注解推断 schema）。"""
-           pool = ctx.get_pool()           # 复用宿主的同一个连接池
-           rid = ctx.request_id_var.get()  # 每请求关联 id
-           ...
+           # 首选 ctx.aexecute 跑只读查询（复用宿主的执行 / 计时 / 行截断 / 审计），
+           # 用 ctx.db_errors 把 DB 异常包成带 rid 的 RuntimeError（不吞编程错误）。
+           async with ctx.db_errors(f"{ctx.plugin_name} 查询"):
+               return await ctx.aexecute(
+                   "SELECT ... WHERE x = %(arg)s",
+                   {"arg": arg},
+                   max_rows=ctx.config.query.max_rows,
+                   source=f"plugin:{ctx.plugin_name}",   # 进完成日志/审计，便于按来源 grep
+               )
    ```
 
-`PluginContext`（`redshift_mcp.plugin`）提供 `mcp` / `config` / `logger` / `sql_audit_logger` / `request_id_var` / `get_pool` / `db_runtime_errors`，是稳定的公开 API。完整参考实现见 `plugins/error_api/`。
+`PluginContext`（`redshift_mcp.plugin`）提供 `mcp` / `config` / `logger` / `sql_audit_logger` / `request_id_var` / `get_pool` / `aexecute` / `db_runtime_errors` / `plugin_name`，外加方法 `db_errors(operation="查询", *, logger=None)`，是稳定的公开 API。`aexecute`（= host 的 `db.aexecute`）是插件执行只读查询的**首选入口**；`get_pool` 保留给需要自管连接的特殊场景；`plugin_name` 是本插件的 entry-point 名（用于 `source` / 子 logger，避免硬编码自名）。`db_errors` 的 `operation` 是面向客户端/日志的「什么失败了」标签，默认中性的「查询」即可——**不必放工具名**：客户端错误里的工具名由 FastMCP 的 `Error executing tool <name>:` 前缀自动提供。完整参考实现见 `plugins/complex/`。
 
 ### 安装与启用
 
@@ -115,12 +125,12 @@ Authorization: Bearer <server.auth_token>
 uv sync --all-packages
 
 # 或单独打包后装进与主程序同一个 venv（第三方插件即走这条，零 host 改动）
-uv build --package redshift-mcp-error-api
-uv pip install dist/redshift_mcp_error_api-*.whl
+uv build --package redshift-mcp-complex
+uv pip install dist/redshift_mcp_complex-*.whl
 ```
 
-启动日志会打印「插件已加载: error_api (...)」。临时禁用某个已安装插件：`config.yaml` 里
-`plugins.disabled: ["error_api"]`；整体关闭：`plugins.enabled: false`。
+启动日志会打印「插件已加载: complex (...)」。临时禁用某个已安装插件：`config.yaml` 里
+`plugins.disabled: ["complex"]`；整体关闭：`plugins.enabled: false`。
 
 ### 方式二：声明式 SQL 工具（零代码）
 
@@ -172,7 +182,7 @@ npx @modelcontextprotocol/inspector
 - URL: `http://localhost:8000/redshift`
 - Headers: 添加 `Authorization` = `Bearer <your-token>`
 - 打开 **Tools** 标签页：
-  - `query_error_api_by_date` —— `date="2026-05-20"`（由自带 `error_api` 插件提供，默认已加载）
+  - `query_error_api_by_date` —— `date="2026-05-20"`（由自带 `complex` 插件提供，默认已加载）
   - `list_tables` —— 无参数；返回当前白名单
   - `describe_table` —— `table="analytics.events"`（需在 `tables` 白名单内）
   - `run_sql` —— 例如 `sql="SELECT client_ip FROM analytics.events WHERE event_date='2026-05-20' LIMIT 10"`
