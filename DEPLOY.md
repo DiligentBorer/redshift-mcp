@@ -67,7 +67,46 @@ sudo chown redshift-mcp:redshift-mcp /var/log/redshift-mcp
 sudo chmod 0750 /var/log/redshift-mcp
 ```
 
-## 4. 拉代码 + 装依赖
+## 4. 安装 redshift-mcp
+
+提供两种安装方式：
+
+- **方式 A（推荐·wheel 安装）**：适合生产环境和小白用户，不需要 clone 仓库源码，拿到 wheel 文件即可部署
+- **方式 B（源码安装）**：适合需要改源码的开发者，clone 仓库后 editable 安装
+
+### 方式 A：wheel 安装（推荐）
+
+拿到发布 wheel 包（主程序 + 需要的插件），直接装进 venv：
+
+```bash
+# 1) 创建 venv（uv 自动下载 cpython-3.13）
+sudo -u redshift-mcp -H bash -lc '
+  cd /opt/redshift-mcp
+  uv venv --python 3.13
+'
+
+# 2) 安装主程序 + 插件 wheel
+sudo -u redshift-mcp -H bash -lc '
+  cd /opt/redshift-mcp
+  uv pip install /path/to/redshift_mcp-*.whl
+  uv pip install /path/to/redshift_mcp_complex-*.whl   # 按需安装插件
+'
+
+# 3) 验证安装
+sudo -u redshift-mcp -H bash -lc '
+  cd /opt/redshift-mcp
+  .venv/bin/redshift-mcp --version     # 打印版本号
+  .venv/bin/redshift-mcp --list-plugins  # 列出已安装插件
+'
+```
+
+装完后 `redshift-mcp` 命令直接在 `.venv/bin/` 下，**不需要 `uv run`**。
+
+> **提示**：如果插件自带外部配置（如 `complex` 的业务 SQL），见该插件 README —— 它自行从约定路径 / env var 加载，未配置则启动时报错跳过该插件（不影响其余工具）。
+
+### 方式 B：源码安装（开发者）
+
+适合需要改源码、跑测试的场景：
 
 ```bash
 sudo -u redshift-mcp -H bash -lc '
@@ -79,7 +118,9 @@ sudo -u redshift-mcp -H bash -lc '
 '
 ```
 
-### 部署额外插件
+#### 部署额外插件
+
+方式 A 用户直接 `uv pip install` 新插件 wheel 即可。以下为方式 B（源码安装）的额外插件部署：
 
 业务工具以可安装包形式分发，装进与主程序**同一个 venv** 即被 entry_points 自动发现，
 **不需要改 host 的任何配置**。自带的 `complex` 插件随仓库 `uv sync --all-packages` 已装好；
@@ -103,7 +144,7 @@ sudo systemctl restart redshift-mcp
 > 若插件自带外部配置（如 `complex` 的业务 SQL），见该插件 README —— 它自行从约定路径 /
 > env var 加载，未配置则启动时报错跳过该插件（不影响其余工具）。
 
-### 声明式 SQL 工具（零代码）+ 配置拆分
+#### 声明式 SQL 工具（零代码）+ 配置拆分
 
 简单 SQL 不必写 Python 插件，直接在 `config.yaml` 的 `sql_tools:` 段声明即可（详见 README「插件系统」），
 启动 `journalctl` 会出现 `声明式 SQL 工具已注册: <name>`。声明式工具默认有只读安全闸门（`safe: true`）；
@@ -175,8 +216,10 @@ User=redshift-mcp
 Group=redshift-mcp
 WorkingDirectory=/opt/redshift-mcp
 Environment=REDSHIFT_MCP_CONFIG=/etc/redshift-mcp/config.yaml
-# --no-sync: 每次重启不重新解析依赖；确定性 + 快速
-ExecStart=/usr/local/bin/uv run --no-sync redshift-mcp --config /etc/redshift-mcp/config.yaml
+# 方式 A（wheel 安装，推荐）：直接调用 .venv 里的 CLI 入口，不需要 uv run
+ExecStart=/opt/redshift-mcp/.venv/bin/redshift-mcp --config /etc/redshift-mcp/config.yaml
+# 方式 B（源码安装）：用 uv run 启动 editable 安装的包
+# ExecStart=/usr/local/bin/uv run --no-sync redshift-mcp --config /etc/redshift-mcp/config.yaml
 Restart=on-failure
 RestartSec=5
 KillSignal=SIGTERM
@@ -344,6 +387,21 @@ tail -f /var/log/redshift-mcp/redshift-mcp.log
 
 ## 11. 升级流程
 
+### 方式 A（wheel 安装）
+
+```bash
+# 拿到新版本 wheel 后直接重装
+sudo -u redshift-mcp -H bash -lc '
+  cd /opt/redshift-mcp
+  uv pip install --force-reinstall /path/to/redshift_mcp-新版本.whl
+  uv pip install --force-reinstall /path/to/redshift_mcp_complex-新版本.whl  # 按需
+'
+sudo systemctl restart redshift-mcp
+sudo systemctl status redshift-mcp
+```
+
+### 方式 B（源码安装）
+
 ```bash
 sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
@@ -357,6 +415,20 @@ sudo systemctl status redshift-mcp
 `uv.lock` 在仓库里锁定依赖版本。Python 大版本切换时（比如 3.13 → 3.14），用 `rm -rf .venv && uv sync --all-packages` 重建。
 
 ## 12. 回滚
+
+### 方式 A（wheel 安装）
+
+```bash
+# 用上一版本的 wheel 重装
+sudo -u redshift-mcp -H bash -lc '
+  cd /opt/redshift-mcp
+  uv pip install --force-reinstall /path/to/redshift_mcp-旧版本.whl
+  uv pip install --force-reinstall /path/to/redshift_mcp_complex-旧版本.whl  # 按需
+'
+sudo systemctl restart redshift-mcp
+```
+
+### 方式 B（源码安装）
 
 ```bash
 sudo -u redshift-mcp -H bash -lc 'cd /opt/redshift-mcp && git checkout <prev-tag> && uv sync --all-packages'
@@ -386,9 +458,10 @@ sudo systemctl restart redshift-mcp
 
 | 用途 | 路径 |
 | --- | --- |
-| 代码 | `/opt/redshift-mcp/` |
-| 自带插件源码（workspace 成员） | `/opt/redshift-mcp/plugins/complex/` |
-| 虚拟环境（uv 管理） | `/opt/redshift-mcp/.venv` |
+| 代码（仅方式 B·源码安装） | `/opt/redshift-mcp/` |
+| 自带插件源码（仅方式 B·workspace 成员） | `/opt/redshift-mcp/plugins/complex/` |
+| 虚拟环境 | `/opt/redshift-mcp/.venv` |
+| CLI 入口（wheel 安装后） | `/opt/redshift-mcp/.venv/bin/redshift-mcp` |
 | Python 解释器 | `/var/lib/redshift-mcp/.local/share/uv/python/cpython-3.13.*/` |
 | 配置 | `/etc/redshift-mcp/config.yaml`（0640 root:redshift-mcp） |
 | 配置片段（可选，include 合并） | `/etc/redshift-mcp/conf.d/*.yaml` |
