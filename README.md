@@ -30,23 +30,8 @@
 
 依赖 Python 3.10+ 和 [uv](https://docs.astral.sh/uv/)。
 
-### 方式 A：wheel 安装（推荐，无需 clone 仓库）
-
-适合生产环境和小白用户，拿到 wheel 文件即可部署：
-
 ```bash
-uv venv --python 3.13
-uv pip install dist/redshift_mcp-*.whl           # 主程序
-uv pip install dist/redshift_mcp_complex-*.whl   # 按需安装插件
-```
-
-装完后 `redshift-mcp` 命令直接在 `.venv/bin/` 下，**不需要 `uv run`**。
-
-### 方式 B：源码安装（开发者）
-
-适合需要改源码、跑测试的场景：
-
-```bash
+git clone <你的仓库地址>
 cd McpRedshift
 uv sync --all-packages    # 主程序 + plugins/* 下所有插件一并 editable 装好
 cp config.example.yaml config.yaml
@@ -56,18 +41,12 @@ cp config.example.yaml config.yaml
 ## 运行
 
 ```bash
-# 方式 A（wheel 安装）：直接调用 .venv 里的 CLI 入口
-.venv/bin/redshift-mcp --config config.yaml
-
-# 方式 B（源码安装）：通过 uv run 启动
 uv run redshift-mcp --config config.yaml
-
 # server 监听 http://0.0.0.0:8000/redshift（可配置）
 
 # 免启动列出已安装插件（ep.name / distribution / version）——查 plugins.disabled 该填什么名
-.venv/bin/redshift-mcp --list-plugins      # 方式 A
-uv run redshift-mcp --list-plugins         # 方式 B，简写 -l
-.venv/bin/redshift-mcp --version           # 方式 A；--help / -h 看全部参数
+uv run redshift-mcp --list-plugins      # 简写 -l
+uv run redshift-mcp --version           # 打印版本；--help / -h 看全部参数
 ```
 
 所有请求必须带：
@@ -229,4 +208,4 @@ npx @modelcontextprotocol/inspector
 
 ## 生产部署
 
-部署到一台干净的 RHEL 系服务器（systemd + nginx + TLS），见 [DEPLOY.md](DEPLOY.md)。
+见 [DEPLOY.md](DEPLOY.md)。
