@@ -175,14 +175,23 @@ sudo systemctl restart redshift-mcp
 
 ## 5. 配置文件
 
+**两种方式获取配置模板：**
+
 ```bash
-sudo cp /opt/redshift-mcp/config.example.yaml /etc/redshift-mcp/config.yaml
+# 方式一：wheel 自带模板（文件在 venv 的 redshift_mcp 包目录下）
+sudo cp "$(find /opt/redshift-mcp/.venv -path "*/redshift_mcp/config.example.yaml" -print -quit)" \
+        /etc/redshift-mcp/config.yaml
+
+# 方式二：从 GitHub 下载
+# sudo curl -o /etc/redshift-mcp/config.yaml \
+#   https://raw.githubusercontent.com/DiligentBorer/redshift-mcp/main/config.example.yaml
+
 sudo chown root:redshift-mcp /etc/redshift-mcp/config.yaml
 sudo chmod 0640 /etc/redshift-mcp/config.yaml
 sudo vi /etc/redshift-mcp/config.yaml
 ```
 
-填入实际值：
+填入实际值（关键字段）：
 
 ```yaml
 database:
@@ -192,6 +201,9 @@ database:
   user: <readonly_user>
   password: <password>
   sslmode: require
+  pool_min_size: 1
+  pool_max_size: 5
+  connect_timeout: 10
 
 server:
   host: 127.0.0.1               # 只听 loopback；外部流量全走 nginx
@@ -214,6 +226,14 @@ logging:
   max_bytes: 10485760
   backup_count: 5
   as_json: false
+  sql_audit_level: WARNING      # 默认不输出 SQL 文本（PII 安全）；需审计时改 INFO
+  sql_audit_file: null          # null = 与运行日志合流；非空路径 = 独立审计文件
+
+# 通用查询白名单（schema.table）。留空 [] = 禁用三件套。详见 config.example.yaml 完整注释。
+tables: []
+
+# 声明式 SQL 工具（零代码）。详见 README 插件系统段。
+# sql_tools: []
 ```
 
 ## 6. systemd unit

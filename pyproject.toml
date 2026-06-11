@@ -19,8 +19,16 @@ redshift-mcp = "redshift_mcp.server:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# 放在 [tool.hatch.build] 全局层（而非仅 targets.wheel），让 sdist 与 wheel 都生效 ——
+# 否则 `uv build` 先打 sdist 再从 sdist 出 wheel，仅 wheel 配的 artifacts 会被绕过。
+[tool.hatch.build]
+# 把仓库根目录的 config.example.yaml 强制打包进 wheel，生产部署时可直接 cp 到 /etc。
+# force-include 能把 packages 目录外的文件打进 wheel。
+artifacts = ["config.example.yaml"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/redshift_mcp"]
+force-include = { "config.example.yaml" = "redshift_mcp/config.example.yaml" }
 
 [dependency-groups]
 dev = [
