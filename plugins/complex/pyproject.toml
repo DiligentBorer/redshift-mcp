@@ -3,6 +3,7 @@ name = "redshift-mcp-complex"
 version = "0.3.0"
 description = "redshift-mcp 插件：Error API IP 命中统计（业务预设查询）"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
 # 依赖宿主主程序（import PluginContext 类型）；自带配置加载用 pyyaml，独立项目显式声明、不靠 host 传递。
 # workspace 下 redshift-mcp 走本地源（见根 pyproject 的 [tool.uv.sources]）。
