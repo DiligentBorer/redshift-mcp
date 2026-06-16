@@ -9,8 +9,8 @@ updates:
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      # 单人低流量仓库，每月集中检查一次即可（weekly 会每周冒 PR、偏吵）。
+      interval: "monthly"
       time: "09:00"
       timezone: "Asia/Shanghai"
     # 一次最多开 5 个版本更新 PR，避免刷屏（安全更新 PR 不计入此上限）。
