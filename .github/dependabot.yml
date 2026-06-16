@@ -1,0 +1,44 @@
+# Dependabot 配置（版本更新）。
+# 安全更新（security updates）由 GitHub 在仓库 Settings > Security 自动开启，
+# 不依赖本文件；本文件额外开启"版本更新"，定期把依赖升到最新。
+#
+# 包管理用 uv（根 uv.lock 管理整个 workspace，含 plugins/* 成员），
+# 故只需一个 uv 生态条目监控根目录的 lockfile + manifest。
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    # 一次最多开 5 个版本更新 PR，避免刷屏（安全更新 PR 不计入此上限）。
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    # commit subject 前缀对齐项目 Conventional Commits 规范；
+    # Dependabot 自动生成的正文为英文，属既定例外（同 CI 文件保留英文）。
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    # 把 minor / patch 升级合并进单个 PR 降噪；major（可能含破坏性变更）
+    # 仍单独开 PR，便于逐个评估。
+    groups:
+      uv-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # 当前仓库无 .github/workflows/，暂不监控 github-actions 生态。
+  # 将来加了 CI workflow 后，取消下面注释即可让 Dependabot 一并维护 action 版本：
+  # - package-ecosystem: "github-actions"
+  #   directory: "/"
+  #   schedule:
+  #     interval: "weekly"
+  #   labels:
+  #     - "dependencies"
+  #   commit-message:
+  #     prefix: "ci"
