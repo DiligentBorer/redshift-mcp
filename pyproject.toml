@@ -37,7 +37,7 @@ force-include = { "config.example.yaml" = "redshift_mcp/config.example.yaml" }
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
-    "httpx>=0.27",   # required by starlette.testclient
+    "httpx2",   # required by starlette.testclient（starlette>=1.3 起改用 httpx2，用 httpx 会触发弃用警告）
 ]
 
 # uv workspace（monorepo）：plugins/ 下每个目录都是一个 workspace 成员包（通配，新增插件无需逐个声明）。
