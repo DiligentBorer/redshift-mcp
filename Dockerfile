@@ -25,14 +25,21 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # ---------- runtime ----------
 FROM python:3.13-slim AS runtime
+# 默认 0 = 公共镜像只装主包;私有线用 --build-arg INSTALL_COMPLEX=1 把 complex 一并装入。
+# complex 含 gitignored 业务 SQL,作为公共镜像不内置(与 DEPLOY.md「按需安装插件」一致)。
+ARG INSTALL_COMPLEX=0
 # 非 root 运行,贴合最小权限原则
 RUN useradd -r -u 10001 -m -d /app appuser
 WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 COPY --from=builder /dist /tmp/dist
-# 在干净 venv 里装 wheel(非 editable),装完即删 uv 与 wheel,保持镜像精简无构建残留
+# 在干净 venv 里装 wheel(非 editable),装完即删 uv 与 wheel,保持镜像精简无构建残留。
+# glob redshift_mcp-*.whl 只匹配主包(其后紧跟 -),不会误匹配 redshift_mcp_complex-*。
 RUN uv venv /app/.venv \
-    && VIRTUAL_ENV=/app/.venv uv pip install /tmp/dist/*.whl \
+    && VIRTUAL_ENV=/app/.venv uv pip install /tmp/dist/redshift_mcp-*.whl \
+    && if [ "$INSTALL_COMPLEX" = "1" ]; then \
+         VIRTUAL_ENV=/app/.venv uv pip install /tmp/dist/redshift_mcp_complex-*.whl; \
+       fi \
     && rm -rf /tmp/dist /bin/uv
 ENV PATH="/app/.venv/bin:$PATH" \
     REDSHIFT_MCP_CONFIG=/etc/redshift-mcp/config.yaml \
