@@ -1,6 +1,6 @@
 # 公开线 CI/CD:跑测试 +(打 tag 时)构建镜像推 GHCR,供社区直接 docker pull。
 # 跑在 GitHub 托管 runner,凭自动注入的 GITHUB_TOKEN,不含任何自有密钥、不触碰生产。
-name: release
+name: Release
 
 on:
   push:
@@ -21,11 +21,14 @@ jobs:
       - name: 容器内构建并跑测试
         run: docker build --target test .
 
-  # 仅打 v* tag 时:构建 runtime 镜像并推 GHCR
+  # 仅打 v* tag 时:构建 runtime 镜像推 GHCR + 主包 wheel/sdist 附到 GitHub Release
   publish:
     needs: test
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write          # 创建 Release / 上传 assets 所需
+      packages: write          # 推 GHCR(ghcr.io)所需
     steps:
       - uses: actions/checkout@v5
 
@@ -55,3 +58,19 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      # 构建主包 wheel + sdist,附到 GitHub Release 供直接下载
+      # (complex 插件含 gitignored 业务 SQL,不公开分发,故只打主包)
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: 构建主包 wheel + sdist
+        run: uv build --package redshift-mcp
+        # 产物落在 dist/redshift_mcp-<ver>-py3-none-any.whl 与 dist/redshift_mcp-<ver>.tar.gz
+
+      - name: 创建 Release 并附上 wheel/sdist
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true     # 自动生成发布说明
+          fail_on_unmatched_files: true    # dist 为空就让步骤失败,避免发空 Release
