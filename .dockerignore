@@ -1,0 +1,36 @@
+# 构建上下文忽略。注意:pyproject.toml / uv.lock / src / plugins / *.example.* 必须保留(打包与测试要用)。
+
+# 版本控制与工具状态
+.git
+.gitignore
+.claude
+
+# Python 构建/缓存产物
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+.uv/
+
+# 测试缓存
+.pytest_cache/
+
+# 运行时日志(不进镜像)
+logs/
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
