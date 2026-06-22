@@ -38,6 +38,10 @@ cp config.example.yaml config.yaml
 # 编辑 config.yaml：填入 Redshift host/dbname/user/password 与 auth_token
 ```
 
+> 不想从源码装的话，也可从 [Releases 页面](https://github.com/DiligentBorer/redshift-mcp/releases)
+> 下载主包 `.whl` 直接 `uv pip install redshift_mcp-*.whl`（或 `pip install`）；
+> 或用现成的 GHCR 镜像，见下方「[用 Docker 运行](#用-docker-运行ghcr-镜像)」。
+
 ## 运行
 
 ```bash
@@ -80,6 +84,45 @@ Authorization: Bearer <server.auth_token>
 | `tables` | 列表 | 通用查询能力的表白名单（schema.table）。留空 `[]` 等于禁用三件套 |
 
 可以用 `REDSHIFT_MCP_CONFIG=/path/to/config.yaml` 覆盖配置文件路径。
+
+## 用 Docker 运行（GHCR 镜像）
+
+每次打 `v*` tag，CI 会构建 runtime 镜像推到 GHCR：`ghcr.io/diligentborer/redshift-mcp`
+（tags：`latest`、具体版本 `0.3.0`、系列 `0.3`）。不想装 uv / 源码时直接拉镜像跑：
+
+```bash
+docker pull ghcr.io/diligentborer/redshift-mcp:latest
+
+# 准备 config.yaml（字段见上「配置」），只读挂载到镜像约定路径
+docker run -d --name redshift-mcp \
+  -p 8000:8000 \
+  -v "$(pwd)/config.yaml:/etc/redshift-mcp/config.yaml:ro" \
+  ghcr.io/diligentborer/redshift-mcp:latest
+# 服务监听 http://<host>:8000/redshift
+```
+
+- 镜像已内置 `REDSHIFT_MCP_CONFIG` 与 entrypoint，**只需挂载 `/etc/redshift-mcp/config.yaml`**，
+  无需额外参数；想改监听端口 / 路径在 `config.yaml` 里调。
+- 非 root（uid 10001）运行；自带 TCP HEALTHCHECK（服务无独立 health 端点且需 Bearer，
+  故探活只测端口连通性）。
+- tag 选择：生产钉具体版本（`:0.3.0` 或 `:0.3`），`:latest` 仅尝鲜。
+- **公共镜像只含通用三件套 + 随 `config.yaml` 的声明式 `sql_tools`，不内置 `complex` 等
+  Python 插件**。需要 complex：① 自建镜像
+  `docker build --target runtime --build-arg INSTALL_COMPLEX=1 -t redshift-mcp:complex .`
+  （需本地有插件真实 config/SQL）；或 ② 以本镜像为基础再 `uv pip install redshift_mcp_complex-*.whl`。
+
+最小 `docker-compose.yaml`：
+
+```yaml
+services:
+  redshift-mcp:
+    image: ghcr.io/diligentborer/redshift-mcp:0.3
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.yaml:/etc/redshift-mcp/config.yaml:ro
+    restart: unless-stopped
+```
 
 ## 插件系统
 
