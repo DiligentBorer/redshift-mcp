@@ -3,6 +3,24 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.2] - 2026-06-24
+
+可观测性改进,核心查询行为不变,升 patch。
+
+### Added
+
+- **`logging.uvicorn_access_log` 开关**（默认 `true`）：控制 uvicorn 自身的 HTTP 访问流水日志。
+  放在 nginx 等反代之后时可设 `false` 关掉，避免与反代的访问日志重复 + 噪音（反代后 uvicorn 只看得到
+  代理 IP）。仅关该项，不影响 `uvicorn.error` 与带 rid 的业务日志。
+- **会话建立日志带来源客户端**：MCP `initialize` 时补记一行
+  `会话建立 session=.. client=..`（client 取自 initialize 的 `clientInfo`，与 SDK 的
+  `Created new transport` 同 rid / 同 session），便于多个客户端连同一 server 时按来源区分。
+
+### Changed
+
+- **`RequestIdMiddleware` 重写为纯 ASGI**：在保持 rid 染色 + 回写 `X-Request-ID`（401 也带）的基础上，
+  合并上面的会话/client 日志 —— 取 clientInfo 需读 initialize 请求体并安全回放给下游，纯 ASGI 才能做到。
+
 ## [0.3.1] - 2026-06-24
 
 发布与分发层面的改进，核心代码无变更，故升 patch。
