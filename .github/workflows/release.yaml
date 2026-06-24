@@ -79,6 +79,10 @@ jobs:
       - name: 创建 Release 并附上 wheel/sdist
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          # 只传发行产物;不用 dist/* —— uv build 会在 dist/ 留一个 .gitignore,
+          # 会被 softprops 改名成 default.gitignore 误传为资产。
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
           generate_release_notes: true     # 自动生成发布说明
-          fail_on_unmatched_files: true    # dist 为空就让步骤失败,避免发空 Release
+          fail_on_unmatched_files: true    # 匹配不到就让步骤失败,避免发空 Release
