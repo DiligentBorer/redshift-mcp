@@ -45,6 +45,12 @@ logging:
   max_bytes: 10485760           # 10 MB
   backup_count: 5               # 保留这么多份历史文件
   as_json: false                # true => 输出 JSON 行格式（而非文本格式）
+  # uvicorn 自身的 HTTP 访问流水（每请求一行 method/path/status）。
+  #   true（默认）→ 打印每个请求的访问日志
+  #   false       → 关闭。放在 nginx 等反代之后时建议关：反代已记真实客户端访问日志，
+  #                 uvicorn 在代理后只看得到代理 IP，留着既重复又噪音。
+  #                 仅关 uvicorn 这份 access，不影响 uvicorn.error 与带 rid 的业务日志。
+  uvicorn_access_log: true
 
   # ---- SQL 审计通道（run_sql 的完整 SQL 文本）----
   # 与上面的 level 正交，专门控制是否把每条 run_sql 的 SQL 文本落盘。

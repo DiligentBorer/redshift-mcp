@@ -15,6 +15,7 @@ from typing import Any
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -349,23 +350,67 @@ async def run_sql(sql: str) -> dict[str, Any]:
         ) from exc
 
 
-class RequestIdMiddleware(BaseHTTPMiddleware):
-    """为每个 HTTP 请求生成（或接受上游传入）一个 request_id，绑定到当前
-    contextvars 上下文里，下游 logger / 工具处理器都能读到。
-    响应里也会回写 ``X-Request-ID`` 头。
+class RequestIdMiddleware:
+    """每请求 rid 染色 + 响应回写 ``X-Request-ID``；并在 MCP ``initialize`` 时补记一行
+    ``会话建立 session=.. client=..``（同 rid / 同 session，便于按来源客户端定位连接）。
+
+    纯 ASGI（非 BaseHTTPMiddleware）：取 clientInfo 需读 initialize **请求体**并原样回放给下游，
+    而 BaseHTTPMiddleware 里读 body 会消耗 receive、下游（MCP）读不到，故用纯 ASGI 做
+    「读 body → 回放」。rid 仍由本中间件管理：从上游 ``X-Request-ID`` 头取或新生成，set 进
+    ``request_id_var`` 供下游 logger / 工具读取；挂在最外层，故 401 响应也带 ``X-Request-ID``。
+
+    仅「无 session 头的 POST」（即 initialize，低频）才缓冲并解析 body；其余请求不碰 body、
+    不影响流式响应。body 解析失败 / 非 initialize / 字段缺失一律静默降级（client=None，不记会话行）。
     """
 
-    HEADER = "x-request-id"
+    _HEADER = b"x-request-id"
+    _SESSION_HEADER = MCP_SESSION_ID_HEADER.encode("latin-1")
 
-    async def dispatch(self, request: Request, call_next):
-        rid = request.headers.get(self.HEADER) or new_request_id()
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        rid = (headers.get(self._HEADER) or b"").decode("latin-1") or new_request_id()
+
+        client: str | None = None
+        body: bytes | None = None
+        if scope.get("method") == "POST" and self._SESSION_HEADER not in headers:
+            body = await _drain_body(receive)
+            client = _extract_init_client(body)
+
         token = request_id_var.set(rid)
         try:
-            response = await call_next(request)
+            async def send_wrapper(message) -> None:
+                if message["type"] == "http.response.start":
+                    # 回写 X-Request-ID（去掉可能已存在的同名头再追加，避免重复）。
+                    resp_headers = [
+                        (k, v) for (k, v) in message.get("headers", [])
+                        if k.lower() != self._HEADER
+                    ]
+                    resp_headers.append((self._HEADER, rid.encode("latin-1")))
+                    message = {**message, "headers": resp_headers}
+                    # initialize 请求补一行会话日志；响应带 Mcp-Session-Id 就填上，没有（如 401）→ "-"。
+                    if client is not None:
+                        sid = next(
+                            (v for (k, v) in resp_headers if k == self._SESSION_HEADER),
+                            None,
+                        )
+                        logger.info(
+                            "会话建立 session=%s client=%s",
+                            sid.decode("latin-1") if sid else "-",
+                            client,
+                        )
+                await send(message)
+
+            downstream = _replay_body(body, receive) if body is not None else receive
+            await self.app(scope, downstream, send_wrapper)
         finally:
             request_id_var.reset(token)
-        response.headers["X-Request-ID"] = rid
-        return response
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
@@ -398,6 +443,62 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
                 headers={"WWW-Authenticate": "Bearer"},
             )
         return await call_next(request)
+
+
+async def _drain_body(receive) -> bytes:
+    """收齐一个请求的 body。
+
+    MCP ``initialize`` 是普通小 JSON POST，可安全全量缓冲。遇到非 ``http.request``
+    事件（如 ``http.disconnect``）即停。
+    """
+    chunks: list[bytes] = []
+    while True:
+        message = await receive()
+        if message["type"] != "http.request":
+            break
+        chunks.append(message.get("body", b""))
+        if not message.get("more_body", False):
+            break
+    return b"".join(chunks)
+
+
+def _replay_body(body: bytes, receive):
+    """回放缓冲的 ``body`` 一次，之后把 receive **交还真实 receive**。
+
+    关键：body 回放完后必须委托回真实 ``receive``（让它照常阻塞、透传真正的
+    ``http.disconnect`` 等事件）；若在此伪造 ``http.disconnect``，流式（SSE）响应的
+    「监听断开」任务会立刻收到假断开而取消整个响应 → ``No response returned``。
+    """
+    delivered = False
+
+    async def _receive():
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return await receive()
+
+    return _receive
+
+
+def _extract_init_client(body: bytes) -> str | None:
+    """从 JSON-RPC body 提取 ``initialize`` 的 clientInfo，拼成 ``name/version``。
+
+    非 ``initialize`` / body 非 JSON / 结构异常一律返回 ``None``（调用方据此放行、不记日志）。
+    字段缺失时降级为 ``unknown`` / ``?``。
+    """
+    try:
+        payload = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("method") != "initialize":
+        return None
+    params = payload.get("params")
+    info = (params or {}).get("clientInfo") if isinstance(params, dict) else None
+    info = info if isinstance(info, dict) else {}
+    name = info.get("name") or "unknown"
+    version = info.get("version") or "?"
+    return f"{name}/{version}"
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -519,9 +620,9 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("声明式 SQL 工具: %s", sql_tools or "(无)")
 
     # 4) 构建 ASGI app 并挂中间件（rid 在外层、auth 在内层）。
-    # Starlette 里**最后 add_middleware 的处于最外层**，因此顺序很关键：
-    # 先 add auth，再 add request-id；这样 request-id 包住 auth，401 响应
-    # 也带 X-Request-ID 头。
+    # Starlette 里**最后 add_middleware 的处于最外层**：先 add auth、再 add request-id，
+    # 使 request-id 包住 auth —— 401 响应也带 X-Request-ID 头。
+    # RequestIdMiddleware（纯 ASGI）兼管 initialize 的会话/client 日志（读 body 取 clientInfo）。
     mcp.settings.streamable_http_path = _cfg.server.path
     app = mcp.streamable_http_app()
     app.add_middleware(
@@ -540,6 +641,7 @@ def main(argv: list[str] | None = None) -> int:
         host=_cfg.server.host,
         port=_cfg.server.port,
         log_config=log_config,
+        access_log=_cfg.logging.uvicorn_access_log,   # false 时彻底不打 uvicorn.access 访问流水
     )
     return 0
 

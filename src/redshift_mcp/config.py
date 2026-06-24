@@ -111,6 +111,12 @@ class LoggingConfig(BaseModel):
     max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)  # 10 MB
     backup_count: int = Field(default=5, ge=0)
     as_json: bool = False  # true => 输出 JSON 行格式（而非纯文本）
+    # uvicorn 自身的 HTTP 访问流水日志（每个请求一行 method/path/status）。
+    # 命名带 uvicorn_ 前缀以明确这是 uvicorn 那份固定格式的 access，不是业务日志。
+    # 默认 true；反代（nginx）已记真实客户端访问日志时,可设 false 关掉以免重复 +
+    # 噪音(反代后 uvicorn 只看得到代理 IP)。仅关 access 流水,不影响 uvicorn.error
+    # 与 redshift_mcp / mcp.server.* 等带 rid 的业务日志。
+    uvicorn_access_log: bool = True
 
     # ---- SQL 审计专用通道（run_sql 的完整 SQL 文本走这里）----
     # 与 level 正交：默认 WARNING 意味着 INFO/DEBUG 级 SQL 不输出（PII 安全）；
