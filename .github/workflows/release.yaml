@@ -39,6 +39,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 多架构构建:QEMU 提供 arm64 模拟,buildx 提供 multi-platform 构建器
+      - name: 配置 QEMU(arm64 模拟)
+        uses: docker/setup-qemu-action@v3
+
+      - name: 配置 Buildx
+        uses: docker/setup-buildx-action@v3
+
       # 从 git ref 自动推导镜像 tag(v 版本号 + 语义化系列 + latest)
       - name: 生成镜像元数据
         id: meta
@@ -50,11 +57,12 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
-      - name: 构建并推送 runtime 镜像
+      - name: 构建并推送 runtime 镜像(多架构)
         uses: docker/build-push-action@v6
         with:
           context: .
           target: runtime
+          platforms: linux/amd64,linux/arm64    # 双架构:arm 机器原生跑,消除 platform mismatch warning
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
