@@ -3,6 +3,25 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.1] - 2026-06-24
+
+发布与分发层面的改进，核心代码无变更，故升 patch。
+
+### Added
+
+- **公开发布 workflow（GHCR + Release）**：打 `v*` tag 时构建 runtime 镜像推 GHCR，并把主包
+  `wheel` / `sdist` 附到 GitHub Release 供直接下载（说明由 `generate_release_notes` 自动生成）。
+- **多架构镜像**：GHCR 镜像同时构建 `linux/amd64` + `linux/arm64`，`docker pull` 自动按本机架构选层
+  —— Apple Silicon 等 arm64 机器原生运行，消除 platform mismatch warning。
+- **README**：新增「用 Docker 运行（GHCR 镜像）」一节（`docker run` / `docker-compose` / 配置挂载说明）；
+  安装段补充从 Releases 页面下载主包 wheel 的入口。
+
+### Changed
+
+- **公共镜像不再内置 `complex` 插件**：`runtime` 阶段默认只装主包；私有线可用
+  `--build-arg INSTALL_COMPLEX=1` 按需 opt-in。与「插件按需安装」模型一致，避免把含业务 SQL 的
+  插件打进公开镜像。
+
 ## [0.3.0] - 2026-06-10
 
 聚焦「功能 / 逻辑层面的复用」的一轮重构，对 `PluginContext` 公开 API 为**新增（向后兼容）**，故升 minor。
