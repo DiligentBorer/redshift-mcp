@@ -20,7 +20,12 @@ from .config import AppConfig, LoggingConfig, load_config, split_table_ref
 # RuntimeError 抛给客户端，但**不**吞掉编程错误（TypeError / KeyError / sqlglot
 # 内部断言等）—— 让那些 bug 类异常原样冒泡，由 FastMCP 包成 500，便于早暴露。
 from .errors import DB_RUNTIME_ERRORS as _DB_RUNTIME_ERRORS
-from .middleware import BearerAuthMiddleware, RequestIdMiddleware, request_id_var
+from .middleware import (
+    _SCOPE_RID_KEY,
+    BearerAuthMiddleware,
+    RequestIdMiddleware,
+    request_id_var,
+)
 from .plugin import PluginContext, iter_installed_plugins, load_plugins
 from .sql_tools import register_sql_tools
 
@@ -169,6 +174,45 @@ def build_log_config(cfg: LoggingConfig) -> dict[str, Any]:
     }
 
 
+def _install_per_request_rid(server) -> None:
+    """包一层 lowlevel server 的 ``_handle_request``：每条消息处理入口把 ``request_id_var``
+    设成「发起该消息的那个 HTTP 请求」的 rid，使该请求的全链路日志（含 SDK 的
+    ``Processing request of type X``、工具、db、审计）都带同一个 rid，**消除会话级 rid**。
+
+    背景：MCP 把会话消息处理跑在「建会话时起的长生命周期 task」里，该 task 启动时快照了建会话
+    那次请求的 rid 并复用；SDK 把发起每条消息的 HTTP 请求经 ``message.message_metadata.request_context``
+    带了过来，我们从它的 scope（``RequestIdMiddleware`` 已存入 ``_SCOPE_RID_KEY``）取回真正的 rid。
+
+    与 ``mcp._mcp_server.version`` 同属「因 FastMCP 未暴露公开钩子而对 lowlevel server 打的补丁」。
+    **防御式**：SDK 无此私有方法时记 warning 并跳过（rid 退回会话级），绝不影响请求处理。
+    """
+    orig = getattr(server, "_handle_request", None)
+    if not callable(orig):
+        logger.warning("未安装 per-request rid 包装：SDK 无 _handle_request，rid 退回会话级")
+        return
+
+    async def _wrapped(message, *args, **kwargs):  # 作实例属性赋值 → 调用时不带 self
+        token = None
+        try:
+            scope = getattr(
+                getattr(getattr(message, "message_metadata", None), "request_context", None),
+                "scope",
+                None,
+            )
+            rid = scope.get(_SCOPE_RID_KEY) if isinstance(scope, dict) else None
+            if rid:
+                token = request_id_var.set(rid)
+        except Exception:  # 任何结构差异都不应影响请求处理，取不到就退回会话级 rid
+            token = None
+        try:
+            return await orig(message, *args, **kwargs)
+        finally:
+            if token is not None:
+                request_id_var.reset(token)
+
+    server._handle_request = _wrapped
+
+
 _cfg: AppConfig | None = None
 mcp = FastMCP("redshift-mcp")
 # FastMCP 的构造器目前尚未暴露 `version` 参数；底层 lowlevel Server 在
@@ -176,6 +220,8 @@ mcp = FastMCP("redshift-mcp")
 # 之前 Inspector 显示的是 MCP SDK 版本号的原因。在此显式设置，让客户端
 # 通过 `serverInfo.version` 看到的是「应用自身」的版本。
 mcp._mcp_server.version = __version__
+# 同属「对 lowlevel server 打的补丁」：每条 MCP 请求处理全程带「发起它的 HTTP 请求」的 rid。
+_install_per_request_rid(mcp._mcp_server)
 
 
 def _get_cfg() -> AppConfig:
