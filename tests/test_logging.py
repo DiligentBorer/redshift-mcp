@@ -9,11 +9,8 @@ from pathlib import Path
 import pytest
 
 from redshift_mcp.config import LoggingConfig
-from redshift_mcp.server import (
-    RequestIdFilter,
-    build_log_config,
-    request_id_var,
-)
+from redshift_mcp.middleware import RequestIdFilter, request_id_var
+from redshift_mcp.server import build_log_config
 
 
 def test_stderr_only_mode_has_no_file_handler() -> None:

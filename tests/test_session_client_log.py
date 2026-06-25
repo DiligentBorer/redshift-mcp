@@ -14,7 +14,7 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from redshift_mcp.server import RequestIdMiddleware, _replay_body
+from redshift_mcp.middleware import RequestIdMiddleware, _replay_body
 
 _SID = "test-session-abc123"
 
