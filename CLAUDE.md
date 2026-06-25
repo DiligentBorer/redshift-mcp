@@ -95,6 +95,8 @@ plugins/complex/ (独立可安装包 redshift-mcp-complex，SQL 由插件自有 
 
 `request_id_var: ContextVar[str]`（定义在 `middleware.py`）默认值为 `"-"`，由 `RequestIdMiddleware` 在每个 HTTP 请求里设置（取自 `secrets.token_hex(4)` 的 8 位 hex，或上游传过来的 `X-Request-ID` 头）。`RequestIdFilter`（同样在 `middleware.py`）把它注入到每条 `LogRecord`，让文本 formatter 的 `[rid=%(request_id)s]` 占位符替换生效，JSON formatter 的 `request_id` 字段也对应填充。当工具（含插件工具，通过 `PluginContext.request_id_var`）捕获到 DB 异常时，会把 rid 放进面向客户端的错误消息，运维侧 `grep rid=XXXX /var/log/redshift-mcp/redshift-mcp.log*` 即可定位完整 traceback。
 
+**rid 是「每 HTTP 请求一个、全程跟随」，没有会话级 rid。** 坑在于：MCP 把 `tools/*` 等消息的处理放在「建会话时起的长生命周期 task」里，该 task 启动时快照了建会话那次请求的 rid 并复用 —— 若不干预，会话内后续请求的处理日志（含 SDK 自己打的 `Processing request of type X`）都会复用建会话的 rid。`server.py` 的 `_install_per_request_rid(mcp._mcp_server)` 解决这点：它**防御式**包一层 lowlevel server 的私有 `_handle_request`，在每条消息处理入口从 `message.message_metadata.request_context.scope`（即 `RequestIdMiddleware` 存入的 `_SCOPE_RID_KEY`）取回「发起该消息的那个 HTTP 请求」的 rid，`request_id_var.set` 后再走原逻辑、结束复位。于是 filter / 工具 / db / 审计 / 插件**全自动**拿到当前请求的 rid，下游零改动。它与 `mcp._mcp_server.version` 同属「因 FastMCP 未暴露公开钩子而对 lowlevel server 打的补丁」，集中在 mcp 实例创建处；SDK 改了私有方法名/结构时记 warning 跳过（rid 退回会话级），不影响请求处理 —— 升级 SDK 复验这一处即可。`notifications/*` 走 `_handle_notification`、不经此包装，不在覆盖范围（数量少、不打 `Processing` 行）。
+
 ### 日志管线
 
 `build_log_config(cfg.logging)` 返回一份 `dictConfig` 字典：

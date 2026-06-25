@@ -35,6 +35,14 @@ def new_request_id() -> str:
     return secrets.token_hex(4)
 
 
+# RequestIdMiddleware 把每个 HTTP 请求的 rid 同时塞进 ASGI scope[_SCOPE_RID_KEY]。
+# MCP 会话消息处理跑在「建会话时起的长生命周期 task」里、其 request_id_var 恒为建会话那次
+# 请求的 rid；server.py 的 _install_per_request_rid 在每条消息处理入口经
+# message.message_metadata.request_context.scope 取回本键，把 rid 重置为「发起该消息的请求」
+# 的 rid —— 从而每个 HTTP 请求全程同 id、消除会话级 rid。
+_SCOPE_RID_KEY = "redshift_mcp_request_id"
+
+
 class RequestIdFilter(logging.Filter):
     """把当前 request_id 注入到每条 LogRecord，便于 formatter 渲染。"""
 
@@ -125,6 +133,9 @@ class RequestIdMiddleware:
 
         headers = dict(scope.get("headers") or [])
         rid = (headers.get(self._HEADER) or b"").decode("latin-1") or new_request_id()
+        # 存进本请求 scope：会话 task 处理具体消息时，server 的包装经 SDK 的
+        # request_ctx/message metadata 取回它，实现每请求独立 rid（消除会话级 rid）。
+        scope[_SCOPE_RID_KEY] = rid
 
         client: str | None = None
         body: bytes | None = None
