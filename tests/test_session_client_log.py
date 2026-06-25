@@ -14,7 +14,7 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from redshift_mcp.middleware import RequestIdMiddleware, _replay_body
+from redshift_mcp.middleware import RequestIdMiddleware, _replay_body, session_id_var
 
 _SID = "test-session-abc123"
 
@@ -113,3 +113,25 @@ async def test_replay_body_delegates_to_real_receive_after_body() -> None:
     second = await recv()
     assert second is sentinel  # 委托给了真实 receive（而非旧的伪造 http.disconnect）
     assert calls == [1]
+
+
+def test_middleware_sets_session_id_var_from_header() -> None:
+    """带 Mcp-Session-Id 头的请求:中间件从头部取出 session id 并 set 进 session_id_var,
+    下游(及其日志)即可读到。"""
+    full_sid = "0123456789abcdef0123456789abcdef"
+    captured: dict[str, str] = {}
+
+    async def endpoint(request):
+        captured["sid"] = session_id_var.get()
+        return PlainTextResponse("ok")
+
+    app = Starlette(routes=[Route("/redshift", endpoint, methods=["POST"])])
+    app.add_middleware(RequestIdMiddleware)
+    client = TestClient(app)
+    resp = client.post(
+        "/redshift",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {}},
+        headers={MCP_SESSION_ID_HEADER: full_sid},
+    )
+    assert resp.status_code == 200
+    assert captured["sid"] == full_sid  # 中间件已从请求头 set 入 var(完整 id)

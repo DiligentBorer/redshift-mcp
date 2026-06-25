@@ -9,8 +9,11 @@ from pathlib import Path
 import pytest
 
 from redshift_mcp.config import LoggingConfig
-from redshift_mcp.middleware import RequestIdFilter, request_id_var
+from redshift_mcp.middleware import RequestIdFilter, request_id_var, session_id_var
 from redshift_mcp.server import build_log_config
+
+_FULL_SID = "0123456789abcdef0123456789abcdef"  # 32 hex（uuid4().hex 形态）
+_SHORT_SID = "01234567"  # 前 8 位
 
 
 def test_stderr_only_mode_has_no_file_handler() -> None:
@@ -56,7 +59,8 @@ def test_request_id_filter_injects_default_dash() -> None:
 
 def test_request_id_filter_picks_up_contextvar_value() -> None:
     f = RequestIdFilter()
-    token = request_id_var.set("ab12cd34")
+    rtoken = request_id_var.set("ab12cd34")
+    stoken = session_id_var.set(_FULL_SID)
     try:
         record = logging.LogRecord(
             name="x", level=logging.INFO, pathname="", lineno=0,
@@ -64,8 +68,34 @@ def test_request_id_filter_picks_up_contextvar_value() -> None:
         )
         f.filter(record)
         assert record.request_id == "ab12cd34"
+        # rid 与 sid 由同一 filter 同时设置（成对保证）；sid 渲染为前 8 位
+        assert record.session_id == _SHORT_SID
     finally:
-        request_id_var.reset(token)
+        session_id_var.reset(stoken)
+        request_id_var.reset(rtoken)
+
+
+def test_filter_extracts_session_id_from_sdk_message() -> None:
+    """session_id_var 为 '-'，但记录来自 SDK streamable_http* logger 且消息内嵌 32hex id
+    → filter 兜底抽出（修复 `Created new transport` 行 sid=- 的关键）。"""
+    f = RequestIdFilter()
+    record = logging.LogRecord(
+        name="mcp.server.streamable_http_manager", level=logging.INFO, pathname="", lineno=0,
+        msg="Created new transport with session ID: %s", args=(_FULL_SID,), exc_info=None,
+    )
+    f.filter(record)
+    assert record.session_id == _SHORT_SID
+
+
+def test_filter_no_session_fallback_for_non_sdk_logger() -> None:
+    """非 SDK logger 即便消息里含 32hex 也不兜底抽取（避免误匹配）。"""
+    f = RequestIdFilter()
+    record = logging.LogRecord(
+        name="redshift_mcp", level=logging.INFO, pathname="", lineno=0,
+        msg="incidental hex %s here", args=(_FULL_SID,), exc_info=None,
+    )
+    f.filter(record)
+    assert record.session_id == "-"
 
 
 def test_logging_pipeline_writes_rid_to_file(tmp_path: Path) -> None:
@@ -76,9 +106,11 @@ def test_logging_pipeline_writes_rid_to_file(tmp_path: Path) -> None:
 
     log = logging.getLogger("redshift_mcp.test_pipeline")
     token = request_id_var.set("trace1234")
+    stoken = session_id_var.set(_FULL_SID)
     try:
         log.info("hello-with-rid")
     finally:
+        session_id_var.reset(stoken)
         request_id_var.reset(token)
     log.info("hello-no-rid")
 
@@ -91,8 +123,9 @@ def test_logging_pipeline_writes_rid_to_file(tmp_path: Path) -> None:
                 pass
 
     content = log_file.read_text(encoding="utf-8")
-    assert "[rid=trace1234] hello-with-rid" in content
-    assert "[rid=-] hello-no-rid" in content
+    # rid 与 sid 成对出现；sid 渲染为前 8 位
+    assert f"[rid=trace1234 sid={_SHORT_SID}] hello-with-rid" in content
+    assert "[rid=- sid=-] hello-no-rid" in content
 
 
 def test_logging_pipeline_json_mode(tmp_path: Path) -> None:
@@ -102,9 +135,11 @@ def test_logging_pipeline_json_mode(tmp_path: Path) -> None:
 
     log = logging.getLogger("redshift_mcp.test_json")
     token = request_id_var.set("jsonrid1")
+    stoken = session_id_var.set(_FULL_SID)
     try:
         log.info("a json line")
     finally:
+        session_id_var.reset(stoken)
         request_id_var.reset(token)
 
     for name in ("redshift_mcp", "root"):
@@ -117,6 +152,7 @@ def test_logging_pipeline_json_mode(tmp_path: Path) -> None:
     last_line = log_file.read_text(encoding="utf-8").strip().splitlines()[-1]
     obj = json.loads(last_line)
     assert obj["request_id"] == "jsonrid1"
+    assert obj["session_id"] == _SHORT_SID
     assert obj["msg"] == "a json line"
     assert obj["level"] == "INFO"
 

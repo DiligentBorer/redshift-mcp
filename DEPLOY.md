@@ -451,8 +451,9 @@ sudo systemctl restart redshift-mcp
 | --- | --- |
 | 看服务状态 | `sudo systemctl status redshift-mcp` |
 | 实时看日志（journald） | `sudo journalctl -u redshift-mcp -f` |
-| 实时看日志（滚动文件，含 `[rid=...]`） | `tail -f /var/log/redshift-mcp/redshift-mcp.log` |
-| 按 request id 搜索 | `sudo grep "rid=ab12cd34" /var/log/redshift-mcp/*.log*` |
+| 实时看日志（滚动文件，含 `[rid=... sid=...]`） | `tail -f /var/log/redshift-mcp/redshift-mcp.log` |
+| 按 request id 搜索（单个请求全链路） | `sudo grep "rid=ab12cd34" /var/log/redshift-mcp/*.log*` |
+| 按 session 搜索（同一会话的所有请求） | `sudo grep "sid=849b262c" /var/log/redshift-mcp/*.log*` |
 | 改配置后生效 | 编辑 `/etc/redshift-mcp/config.yaml` → `sudo systemctl restart redshift-mcp` |
 | 改 unit 后生效 | `sudo systemctl daemon-reload && sudo systemctl restart redshift-mcp` |
 | Nginx reload | `sudo nginx -t && sudo systemctl reload nginx` |
