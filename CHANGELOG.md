@@ -3,6 +3,28 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.3] - 2026-06-25
+
+可观测性与结构改进,核心查询行为不变,升 patch。
+
+### Added
+
+- **日志每请求独立 rid、全链路可追踪**:消除"会话级 rid"——以往同一会话内不同请求的处理日志
+  (含 SDK 的 `Processing request of type X`、`查询完成`、错误、审计)复用建会话时的 rid;现在
+  每个 HTTP 请求(`tools/call`/`tools/list`/`GET`/`DELETE`)全程带各自的 rid。实现:`server.py`
+  防御式包一层 lowlevel server 的 `_handle_request`,在每条消息处理入口按"发起该消息的请求"设 rid。
+- **日志在 rid 旁同时输出 `sid`(会话 id,前 8 位)**:把"同一会话的多个请求"串起来。rid 与 sid 由
+  同一 filter 同时设置、同一格式串渲染,**永远成对出现**;`sid` 是 SDK 完整 session id 的前缀,
+  `grep sid=xxxxxxxx` 可同时命中我方行与 SDK 的 `session ID: <完整>` 行。文本前缀
+  `[rid=.. sid=..]`,JSON 加 `session_id` 字段。
+
+### Changed
+
+- **抽出 `middleware.py`(纯结构重构,行为不变)**:把 HTTP 接入层(`request_id_var` /
+  `RequestIdFilter` / `RequestIdMiddleware` / `BearerAuthMiddleware` + initialize body 辅助)从
+  `server.py` 移到独立模块,`server.py` 回归"日志组装 + 工具 + main"。`request_id_var` 随中间件
+  同迁(被多处共用,留在 server 会成环)。
+
 ## [0.3.2] - 2026-06-24
 
 可观测性改进,核心查询行为不变,升 patch。

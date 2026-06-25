@@ -22,9 +22,11 @@ from .config import AppConfig, LoggingConfig, load_config, split_table_ref
 from .errors import DB_RUNTIME_ERRORS as _DB_RUNTIME_ERRORS
 from .middleware import (
     _SCOPE_RID_KEY,
+    _SCOPE_SID_KEY,
     BearerAuthMiddleware,
     RequestIdMiddleware,
     request_id_var,
+    session_id_var,
 )
 from .plugin import PluginContext, iter_installed_plugins, load_plugins
 from .sql_tools import register_sql_tools
@@ -44,6 +46,7 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "logger": record.name,
             "request_id": getattr(record, "request_id", "-"),
+            "session_id": getattr(record, "session_id", "-"),
             "msg": record.getMessage(),
         }
         if record.exc_info:
@@ -81,7 +84,7 @@ def build_log_config(cfg: LoggingConfig) -> dict[str, Any]:
     formatter_key = "json" if cfg.as_json else "text"
     formatters: dict[str, dict[str, Any]] = {
         "text": {
-            "format": "%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s] %(message)s",
+            "format": "%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s sid=%(session_id)s] %(message)s",
         },
         "json": {
             "()": "redshift_mcp.server.JsonFormatter",
@@ -174,14 +177,15 @@ def build_log_config(cfg: LoggingConfig) -> dict[str, Any]:
     }
 
 
-def _install_per_request_rid(server) -> None:
-    """包一层 lowlevel server 的 ``_handle_request``：每条消息处理入口把 ``request_id_var``
-    设成「发起该消息的那个 HTTP 请求」的 rid，使该请求的全链路日志（含 SDK 的
-    ``Processing request of type X``、工具、db、审计）都带同一个 rid，**消除会话级 rid**。
+def _install_per_request_context(server) -> None:
+    """包一层 lowlevel server 的 ``_handle_request``：每条消息处理入口把 ``request_id_var`` /
+    ``session_id_var`` 设成「发起该消息的那个 HTTP 请求」的 rid / sid，使该请求的全链路日志（含
+    SDK 的 ``Processing request of type X``、工具、db、审计）都带同一对 rid+sid，**消除会话级 rid**。
 
     背景：MCP 把会话消息处理跑在「建会话时起的长生命周期 task」里，该 task 启动时快照了建会话
     那次请求的 rid 并复用；SDK 把发起每条消息的 HTTP 请求经 ``message.message_metadata.request_context``
-    带了过来，我们从它的 scope（``RequestIdMiddleware`` 已存入 ``_SCOPE_RID_KEY``）取回真正的 rid。
+    带了过来，我们从它的 scope（``RequestIdMiddleware`` 已存入 ``_SCOPE_RID_KEY`` / ``_SCOPE_SID_KEY``）
+    取回真正的 rid / sid。
 
     与 ``mcp._mcp_server.version`` 同属「因 FastMCP 未暴露公开钩子而对 lowlevel server 打的补丁」。
     **防御式**：SDK 无此私有方法时记 warning 并跳过（rid 退回会话级），绝不影响请求处理。
@@ -192,21 +196,27 @@ def _install_per_request_rid(server) -> None:
         return
 
     async def _wrapped(message, *args, **kwargs):  # 作实例属性赋值 → 调用时不带 self
-        token = None
+        token = sid_token = None
         try:
             scope = getattr(
                 getattr(getattr(message, "message_metadata", None), "request_context", None),
                 "scope",
                 None,
             )
-            rid = scope.get(_SCOPE_RID_KEY) if isinstance(scope, dict) else None
-            if rid:
-                token = request_id_var.set(rid)
-        except Exception:  # 任何结构差异都不应影响请求处理，取不到就退回会话级 rid
-            token = None
+            if isinstance(scope, dict):
+                rid = scope.get(_SCOPE_RID_KEY)
+                if rid:
+                    token = request_id_var.set(rid)
+                sid = scope.get(_SCOPE_SID_KEY)
+                if sid:
+                    sid_token = session_id_var.set(sid)
+        except Exception:  # 任何结构差异都不应影响请求处理，取不到就退回会话级值
+            token = sid_token = None
         try:
             return await orig(message, *args, **kwargs)
         finally:
+            if sid_token is not None:
+                session_id_var.reset(sid_token)
             if token is not None:
                 request_id_var.reset(token)
 
@@ -221,7 +231,7 @@ mcp = FastMCP("redshift-mcp")
 # 通过 `serverInfo.version` 看到的是「应用自身」的版本。
 mcp._mcp_server.version = __version__
 # 同属「对 lowlevel server 打的补丁」：每条 MCP 请求处理全程带「发起它的 HTTP 请求」的 rid。
-_install_per_request_rid(mcp._mcp_server)
+_install_per_request_context(mcp._mcp_server)
 
 
 def _get_cfg() -> AppConfig:
