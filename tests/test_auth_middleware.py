@@ -6,7 +6,7 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from redshift_mcp.server import BearerAuthMiddleware, RequestIdMiddleware
+from redshift_mcp.middleware import BearerAuthMiddleware, RequestIdMiddleware
 
 TOKEN = "test-token-xyz"
 
