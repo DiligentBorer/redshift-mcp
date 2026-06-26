@@ -55,7 +55,8 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            # latest 只打在正式 tag；prerelease（如 v0.3.4-rc1，含 '-'）不覆盖 latest。
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: 构建并推送 runtime 镜像(多架构)
         uses: docker/build-push-action@v7
