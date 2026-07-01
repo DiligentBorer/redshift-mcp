@@ -1,6 +1,6 @@
 [project]
 name = "redshift-mcp-complex"
-version = "0.3.3"
+version = "0.3.4"
 description = "redshift-mcp 插件：Error API IP 命中统计（业务预设查询）"
 readme = "README.md"
 license = "MIT"

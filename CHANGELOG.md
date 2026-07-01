@@ -3,6 +3,19 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.4] - 2026-07-01
+
+仅发布流水线(CI)加固,代码与运行行为不变,升 patch。
+
+### Changed
+
+- **`latest` 镜像 tag 只在正式 tag 打**:prerelease(如 `v0.3.4-rc1`,ref 名含 `-`)不再覆盖
+  `ghcr.io` 的 `latest` / `major.minor` 系列 tag,避免预发布镜像被误当稳定版拉取。
+- **`setup-uv` 固定到 `v8.2.0`**:改用不可移动的精确版本 tag,消除对会漂移的 `v8` 大版本 tag 的依赖,
+  保证发布流水线可复现。
+- **发布 workflow 的 action 升级到 Node 24**:`checkout` / `metadata-action` 等升级到基于 Node 24
+  运行时的版本,跟随 GitHub Actions runner 的弃用节奏。
+
 ## [0.3.3] - 2026-06-25
 
 可观测性与结构改进,核心查询行为不变,升 patch。
