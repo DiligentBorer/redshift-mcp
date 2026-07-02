@@ -842,7 +842,7 @@ wheels = [
 
 [[package]]
 name = "redshift-mcp"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
@@ -879,7 +879,7 @@ dev = [
 
 [[package]]
 name = "redshift-mcp-complex"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "plugins/complex" }
 dependencies = [
     { name = "pyyaml" },
