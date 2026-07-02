@@ -73,7 +73,7 @@ class ServerConfig(BaseModel):
 
 
 class QueryConfig(BaseModel):
-    # 默认 60s —— 宽事实表上 Error API 查询的典型未缓存耗时实测约 15s；
+    # 默认 60s —— 宽表上典型查询在未命中缓存耗时实测约 15s；
     # 60s 留有 ~4x 安全裕度，且能覆盖冷启动峰值。若集群 / WLM 倾向于把
     # 这种扫描密集查询排队，可调高；若想更快得到失败反馈，可调低。
     statement_timeout_ms: int = Field(default=60000, ge=1)

@@ -23,7 +23,7 @@
   由插件包 `redshift-mcp-complex`（`plugins/complex/`）提供，**SQL 由插件自有 `config.yaml`
   提供**（插件按 `env var > 包内约定路径` 自行加载，见 `_config.py`；仓库只提交模板
   `queries/error_api.example.sql`），命名占位符 `%(event_date)s` / `%(limit)s`。不受表白名单约束。
-  逻辑示意（实际文件里 `LIKE` 模式的字面 `%` 都写成 `%%` 以避开 psycopg3 占位符扫描）：
+  实际 SQL 见插件包内 `plugins/complex/.../queries/`（`LIKE` 字面 `%` 写成 `%%` 以避开 psycopg3 占位符扫描）。
 
 
 ## 安装
@@ -226,10 +226,10 @@ npx @modelcontextprotocol/inspector
 - URL: `http://localhost:8000/redshift`
 - Headers: 添加 `Authorization` = `Bearer <your-token>`
 - 打开 **Tools** 标签页：
-  - `query_error_api_by_date` —— `date="2026-05-20"`（由自带 `complex` 插件提供，默认已加载）
   - `list_tables` —— 无参数；返回当前白名单
   - `describe_table` —— `table="analytics.events"`（需在 `tables` 白名单内）
   - `run_sql` —— 例如 `sql="SELECT client_ip FROM analytics.events WHERE event_date='2026-05-20' LIMIT 10"`
+  - `query_error_api_by_date` —— `date="2026-05-20"`（由自带 `complex` 插件提供，默认已加载）
 
 ## 安全注意事项
 
