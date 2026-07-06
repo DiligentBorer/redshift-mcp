@@ -142,6 +142,31 @@ def test_duplicate_name_skipped(caplog) -> None:
     assert "dup" in caplog.text
 
 
+def test_undeclared_placeholder_skipped(caplog) -> None:
+    """SQL 引用了未在 params 声明的占位符（含误写进注释的情形）→ 注册时 fail-fast、跳过。
+
+    复刻线上现象：注释里写了 %(date)s 但 params 只声明 country，psycopg 执行时
+    会连注释一起扫描占位符，运行期抛 KeyError；本校验在注册期就挡下。
+    """
+    sql = (
+        "-- 命名占位符：%(date)s、%(country)s\n"
+        "SELECT country, count(*) AS n FROM analytics.events "
+        "WHERE country = %(country)s GROUP BY country"
+    )
+    tools = [{
+        "name": "bad_ph",
+        "description": "占位符未声明",
+        "sql": sql,
+        "params": [{"name": "country", "type": "enum", "enum": ["US", "CA"]}],
+    }]
+    ctx = _ctx(tools)
+    with caplog.at_level(logging.ERROR, logger="redshift_mcp.plugins.sql_tools"):
+        registered = register_sql_tools(ctx)
+    assert registered == []                       # 未声明占位符 → 跳过、不注册
+    assert "bad_ph" not in ctx.mcp._tool_manager._tools
+    assert "date" in caplog.text                  # error 里点名未声明的占位符
+
+
 async def test_optional_int_enum_params_are_nullable(monkeypatch) -> None:
     """L5：可选 int / enum 参数注解包成 Optional —— schema 标记可空、不在 required，
     省略调用时绑定 None 而不被签名/pydantic 拒。"""

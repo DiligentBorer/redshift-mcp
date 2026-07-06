@@ -32,8 +32,8 @@ logger = logging.getLogger("redshift_mcp.plugins.sql_tools")
 # 参数类型 → Python 注解基类型。date 注解成 str（schema 为 string），格式由 _impl 另校验。
 _PYTYPE: dict[str, type] = {"string": str, "int": int, "date": str}
 
-# 匹配 psycopg 命名占位符 %(name)s；不会误匹配 %%（字面 percent）或 %s（位置占位符）。
-_PLACEHOLDER = re.compile(r"%\([A-Za-z_]\w*\)s")
+# 匹配 psycopg 命名占位符 %(name)s；捕获组取 name。不会误匹配 %%（字面 percent）或 %s（位置占位符）。
+_PLACEHOLDER = re.compile(r"%\(([A-Za-z_]\w*)\)s")
 
 _POK = inspect.Parameter.POSITIONAL_OR_KEYWORD
 
@@ -67,6 +67,20 @@ def register_sql_tools(ctx: PluginContext) -> list[str]:
     for spec in ctx.config.sql_tools:
         if spec.name in ctx.mcp._tool_manager._tools:
             logger.warning("声明式 SQL 工具名与已注册工具冲突，跳过: %s", spec.name)
+            continue
+        # 占位符校验：psycopg 执行时会扫描整个 SQL（含注释）找 %(name)s，凡出现但未在
+        # params 声明的占位符（最常见是误写进注释、或漏声明），运行期必抛 KeyError。这里
+        # 在注册时就 fail-fast：记 error + 跳过该工具（与 safe 闸门、重名冲突同样不搞崩 server）。
+        declared = {p.name for p in spec.params}
+        used = set(_PLACEHOLDER.findall(spec.sql))
+        undeclared = used - declared
+        if undeclared:
+            logger.error(
+                "声明式 SQL 工具 %s 的 SQL 引用了未在 params 声明的占位符 %s，已跳过。"
+                "请检查：是否误写进注释（psycopg 连注释也扫描占位符）/ 是否漏声明该 params / "
+                "字面 %% 需写成 %%%%。",
+                spec.name, sorted(undeclared),
+            )
             continue
         effective_max = spec.max_rows or ctx.config.query.max_rows
         # 默认执行原始带占位符 SQL；safe=True 且顶层缺 LIMIT 时下面会替换成追加版。
