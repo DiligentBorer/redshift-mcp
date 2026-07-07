@@ -74,9 +74,10 @@ Authorization: Bearer <server.auth_token>
 | `server` | `auth_token` | 静态 Bearer Token |
 | `query` | `statement_timeout_ms` | 单次 SQL 超时（毫秒） |
 | `query` | `max_rows` | 结果行数上限 |
+| `query` | `timezone` | IANA 时区名（默认 `UTC`）；声明式 SQL 工具里可选 `date` 参数「省略取今天」的全局默认时区，可被单个 param 的 `timezone` 覆盖 |
 | `plugins` | `enabled` | 是否加载插件（默认 `true`；`false` 整体跳过）|
 | `plugins` | `disabled` | 已安装但临时不启用的插件名列表（按 entry-point name）|
-| `sql_tools` | 列表 | 声明式 SQL 工具（零代码，见「插件系统」）；每项 `{name, description, sql/sql_file, params, max_rows?, safe?}` |
+| `sql_tools` | 列表 | 声明式 SQL 工具（零代码，见「插件系统」）；每项 `{name, description, sql/sql_file, params, max_rows?, safe?}`，其中 `params` 每项 `{name, type, required?, default?, format?, enum?, timezone?, description?}` |
 | `include` | 列表 | 顶层 glob，把片段文件合并进主配置（见「配置拆分」）|
 | `logging` | `level` | 主日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）|
 | `logging` | `sql_audit_level` | **SQL 审计独立开关**（默认 `WARNING` = 不输出 SQL 文本，PII 安全）。改 `INFO` 即可看每条 `run_sql` 的完整 SQL；与 `level` 正交，**不会**放出 uvicorn / mcp 的内部 DEBUG |
@@ -191,13 +192,16 @@ sql_tools:
       GROUP BY country
       LIMIT 100                # LIMIT 可选：缺则自动追加 LIMIT (max_rows+1)；显式写则原样尊重
     params:
-      - {name: date, type: date, format: "%Y-%m-%d", description: "US 时区日期"}
+      # required: false 且无 default → 调用方省略时默认取「今天」；timezone 覆盖全局 query.timezone
+      - {name: date, type: date, format: "%Y-%m-%d", required: false, timezone: "America/Los_Angeles", description: "事件日期，默认今天(US 西部)"}
       - {name: country, type: enum, enum: ["US", "CA", "UK"], description: "国家码"}
     # max_rows: 5000           # 可选，覆盖全局 query.max_rows
     # safe: true               # 默认开
 ```
 
 - **参数**：`type` 支持 `string` / `int` / `date` / `enum`；FastMCP 按 schema 校验类型，`date` 额外按 `format` 校验。SQL 用命名占位符 `%(参数名)s` 安全绑定（不拼字符串）；LIKE 模式里字面 `%` 写成 `%%`。
+- **占位符须声明**：SQL 里出现的每个 `%(名字)s` 都必须在 `params` 里声明，否则注册时报 error 并跳过该工具。**注释里也不例外** —— psycopg 会连注释一起扫描占位符，所以注释里不要写 `%(名字)s` 字面（这类误写会被同一校验拦下）。
+- **可选 `date` 默认取今天**：`type=date` 且 `required: false` 且**未写 `default`** 的参数，调用方省略时自动绑定「今天」的日期串（按 `format` 生成）。时区取该参数的 `timezone`（IANA 名），未写则用全局 `query.timezone`（默认 `UTC`，见上「配置」表）；写了显式 `default` 则以 `default` 为准、不取今天。适合「不传就查当天」的日报类工具。
 - **安全闸门**：`safe`（默认 `true`）在注册时校验 SQL 是**单条只读 SELECT**（拒 DML/DDL/多语句/SELECT INTO），不通过则跳过该工具并记 error。个别确需特殊语句的可设 `safe: false`（运维自负）。
 - **LIMIT 自动下推**：`safe=true` 时若 SQL 顶层无 LIMIT，自动追加 `LIMIT (max_rows+1)`（`max_rows` 取 `spec.max_rows` 或全局 `query.max_rows`）下推到 DB，避免大表全量拉回内存；显式写了 LIMIT 则原样尊重、不收紧。`safe=false` 不自动加，须自带。
 

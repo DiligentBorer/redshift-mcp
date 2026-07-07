@@ -851,6 +851,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "sqlglot" },
     { name = "starlette" },
+    { name = "tzdata" },
 ]
 
 [package.dev-dependencies]
@@ -868,6 +869,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "sqlglot", specifier = ">=30.11.0,<31" },
     { name = "starlette", specifier = ">=1.3.1" },
+    { name = "tzdata", specifier = ">=2024.1" },
 ]
 
 [package.metadata.requires-dev]

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import contextvars
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from mcp.server.fastmcp import FastMCP
@@ -17,12 +19,12 @@ from redshift_mcp.plugin import PluginContext
 from redshift_mcp.sql_tools import register_sql_tools
 
 
-def _ctx(tools: list[dict], *, max_rows: int = 100) -> PluginContext:
+def _ctx(tools: list[dict], *, max_rows: int = 100, timezone: str = "UTC") -> PluginContext:
     cfg = AppConfig.model_validate(
         {
             "database": {"host": "h", "dbname": "d", "user": "u"},
             "server": {"auth_token": "t"},
-            "query": {"max_rows": max_rows},
+            "query": {"max_rows": max_rows, "timezone": timezone},
             "sql_tools": tools,
         }
     )
@@ -231,6 +233,72 @@ async def test_explicit_limit_respected(monkeypatch) -> None:
     register_sql_tools(ctx)
     await _fn(ctx, "top")(date="2026-05-20", country="US")
     assert captured["sql"] == _SELECT           # 原样尊重，不收紧到 LIMIT 6
+
+
+def _capture_params(monkeypatch) -> dict:
+    """monkeypatch db.execute，返回一个会被填入 params 的 dict。"""
+    captured: dict = {}
+    monkeypatch.setattr(
+        db, "execute",
+        lambda sql, params=None, *, max_rows, source=None: captured.update(params=params) or
+        {"count": 0, "truncated": False, "columns": [], "rows": []},
+    )
+    return captured
+
+
+def _today_in(tz: str) -> set[str]:
+    """现算某时区今天的日期串集合（取调用瞬间，含跨午夜两种可能，规避边界偶发）。"""
+    return {datetime.now(ZoneInfo(tz)).strftime("%Y-%m-%d")}
+
+
+def _date_tool(**param_over) -> list[dict]:
+    param = {"name": "d", "type": "date", "required": False}
+    param.update(param_over)
+    return [{
+        "name": "dt",
+        "description": "可选日期",
+        "sql": "SELECT %(d)s AS d LIMIT 1",
+        "params": [param],
+    }]
+
+
+async def test_optional_date_defaults_to_today_in_configured_tz(monkeypatch) -> None:
+    """required=false 且无显式 default 的 date 参数省略 → 绑定全局 timezone 的今天。"""
+    captured = _capture_params(monkeypatch)
+    ctx = _ctx(_date_tool(), timezone="Asia/Shanghai")
+    register_sql_tools(ctx)
+    before = _today_in("Asia/Shanghai")
+    await _fn(ctx, "dt")()                        # 省略 d
+    after = _today_in("Asia/Shanghai")
+    assert captured["params"]["d"] in (before | after)
+    # schema 描述提示了省略行为
+    desc = ctx.mcp._tool_manager._tools["dt"].parameters["properties"]["d"]["description"]
+    assert "Asia/Shanghai" in desc and "今天" in desc
+
+
+async def test_optional_date_explicit_default_wins(monkeypatch) -> None:
+    """可选 date 写了显式 default → 省略时用该 default，不取今天。"""
+    captured = _capture_params(monkeypatch)
+    ctx = _ctx(_date_tool(default="2020-01-01"), timezone="Asia/Shanghai")
+    register_sql_tools(ctx)
+    await _fn(ctx, "dt")()                        # 省略 d
+    assert captured["params"]["d"] == "2020-01-01"
+    # 有显式 default → 不属于「省略取今天」范畴，描述不追加今天提示
+    desc = ctx.mcp._tool_manager._tools["dt"].parameters["properties"]["d"]["description"]
+    assert "今天" not in desc
+
+
+async def test_param_timezone_overrides_global(monkeypatch) -> None:
+    """参数级 timezone 覆盖全局 —— 用 UTC+14/UTC-11 两个极端时区，日期几乎必然不同。"""
+    captured = _capture_params(monkeypatch)
+    ctx = _ctx(_date_tool(timezone="Pacific/Kiritimati"), timezone="Pacific/Midway")
+    register_sql_tools(ctx)
+    before = _today_in("Pacific/Kiritimati")
+    await _fn(ctx, "dt")()
+    after = _today_in("Pacific/Kiritimati")
+    assert captured["params"]["d"] in (before | after)     # 用了参数级 timezone（Kiritimati）
+    # Kiritimati(UTC+14) 与 Midway(UTC-11) 相差 25h，日历日期永不相同 → 确实没用全局时区
+    assert captured["params"]["d"] not in _today_in("Pacific/Midway")
 
 
 async def test_auto_limit_respects_max_rows_override(monkeypatch) -> None:

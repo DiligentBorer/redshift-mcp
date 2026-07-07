@@ -8,7 +8,7 @@ sql_tools:
     # sql_file 里可不写 LIMIT：顶层缺 LIMIT 时自动追加 LIMIT (max_rows+1) 下推；显式写则原样尊重。
     sql_file: ../queries/active_devices.example.sql
     params:
-      - {name: date, type: date, format: "%Y-%m-%d", description: "US 时区日期"}
+      - {name: date, type: date, format: "%Y-%m-%d", required: false, timezone: "America/New_York", description: "US 时区日期"}
       - {name: country, type: enum, enum: ["US", "CA", "UK"], description: "国家码"}
     # max_rows: 5000
     # safe: true
