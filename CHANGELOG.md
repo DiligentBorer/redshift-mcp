@@ -3,6 +3,32 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.5] - 2026-07-07
+
+声明式 SQL 工具增强:可选 date 参数默认取当前时区今天 + 占位符声明校验,升 patch。
+
+### Added
+
+- **可选 `date` 参数「省略取今天」**:声明式 SQL 工具里 `type=date` 且 `required=false` 且未写
+  `default` 的参数,调用方省略时按有效时区绑定当天日期。有效时区 = 参数级 `timezone` 覆盖全局
+  `query.timezone`(默认 `UTC`,均用 `zoneinfo.ZoneInfo` 校验 IANA 名);写了显式 `default` 则以
+  `default` 为准。适合「不传就查当天」的日报类工具。
+- **新增配置项 `query.timezone`(全局)与 `SqlToolParam.timezone`(参数级)**:两级同名,后者覆盖前者。
+- **依赖 `tzdata`**:最小化容器缺系统时区库时 `ZoneInfo` 会抛 `ZoneInfoNotFoundError`,带上以保证
+  任何环境可解析 IANA 时区名。
+
+### Changed
+
+- **`SqlToolParam` 改为 `extra="forbid"`**:param 上写了未知字段(拼错 / 旧字段名)在配置加载期
+  **直接报错**,不再静默忽略再回退默认。若既有配置的 param 带过多余或拼错字段(此前被静默忽略),
+  升级后需清理。
+
+### Fixed
+
+- **声明式 SQL 工具注册期校验未声明占位符**:psycopg 执行时会扫描整个 SQL(**含注释**)寻找
+  `%(name)s` 占位符;注释里出现但未在 `params` 声明的占位符会让运行期抛 `KeyError`。改为注册期
+  提取 SQL 里所有占位符与 `params` 声明比对,有未声明者记 error 并跳过该工具,不搞崩 server。
+
 ## [0.3.4] - 2026-07-01
 
 仅发布流水线(CI)加固,代码与运行行为不变,升 patch。
