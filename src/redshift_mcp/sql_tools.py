@@ -19,6 +19,7 @@ import re
 import typing
 from datetime import datetime
 from typing import Annotated, Any, Callable
+from zoneinfo import ZoneInfo
 
 from pydantic import Field
 
@@ -136,6 +137,16 @@ def _build_tool(
     """
     log = logger.getChild(spec.name)
 
+    # 可选（required=false）且未写显式 default 的 date 参数：省略调用时按「有效时区的今天」
+    # 兜底。有效时区 = 参数级 timezone 覆盖 or 全局 query.timezone；已在 config 校验过，
+    # 这里构造 ZoneInfo 不会失败。静态解析一次、闭包捕获，避免每次调用重建。
+    global_tz = ctx.config.query.timezone
+    dynamic_date_tz: dict[str, ZoneInfo] = {
+        p.name: ZoneInfo(p.timezone or global_tz)
+        for p in spec.params
+        if p.type == "date" and not p.required and p.default is None
+    }
+
     # required 参数排前（Signature 要求有默认值的参数在后）；MCP 按 keyword 调用，顺序无碍。
     ordered = sorted(spec.params, key=lambda p: not p.required)
     sig_params: list[inspect.Parameter] = []
@@ -149,6 +160,8 @@ def _build_tool(
         desc = (p.description or "")
         if p.type == "date":
             desc = (desc + f"（格式 {p.format}）").strip()
+            if p.name in dynamic_date_tz:
+                desc += f"（省略则默认为 {p.timezone or global_tz} 时区的今天）"
         ann = Annotated[base, Field(description=desc)] if desc else base
         extra = {} if p.required else {"default": p.default}
         sig_params.append(inspect.Parameter(p.name, _POK, annotation=ann, **extra))
@@ -160,13 +173,18 @@ def _build_tool(
         bind: dict[str, Any] = {}
         for p in spec.params:
             value = kwargs.get(p.name, p.default)
-            if p.type == "date" and value is not None:
-                try:
-                    datetime.strptime(value, p.format)
-                except ValueError as exc:
-                    raise ValueError(
-                        f"参数 {p.name} 日期格式不合法: {value!r}，期望 {p.format}。"
-                    ) from exc
+            if p.type == "date":
+                if value is None and p.name in dynamic_date_tz:
+                    # 可选 date 参数被省略且无显式 default → 取有效时区的今天。
+                    # strftime(p.format) 生成，天然符合 format，无需再校验。
+                    value = datetime.now(dynamic_date_tz[p.name]).strftime(p.format)
+                elif value is not None:
+                    try:
+                        datetime.strptime(value, p.format)
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"参数 {p.name} 日期格式不合法: {value!r}，期望 {p.format}。"
+                        ) from exc
             bind[p.name] = value
 
         # 阻塞 DB 调用走 db.aexecute（to_thread），不阻塞事件循环。

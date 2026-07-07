@@ -24,6 +24,8 @@ server:
 query:
   statement_timeout_ms: 60000   # 单条 SQL 超时（毫秒）；约为实测典型值 15s 的 4 倍
   max_rows: 10000               # 结果行数截断阈值
+  timezone: UTC                 # IANA 时区名；声明式 SQL 工具里可选 date 参数「省略取今天」用它兜底
+                                # （可被单个 param 的 timezone 覆盖）。按业务时区设置，如 America/Los_Angeles
 
 plugins:
   # 插件以独立可安装包形式分发：在自己的 pyproject.toml 里声明
@@ -95,7 +97,11 @@ tables: []
 # ============================================================================
 # 每项 = 一个工具。参数 type 支持 string / int / date / enum；调用时由 FastMCP 按
 # schema 校验类型，date 额外按 format 校验。SQL 用命名占位符 %(参数名)s 绑定（安全，
-# 不拼字符串）。LIKE 模式里的字面 % 要写成 %%。
+# 不拼字符串）。LIKE 模式里的字面 % 要写成 %%。注释里也不要写 %(名字)s —— psycopg 会
+# 连注释一起扫描占位符，出现但未在 params 声明的会被注册期校验拦下、跳过该工具。
+#
+# date 参数若 required: false 且不写 default，调用方省略时默认取「今天」——时区用该 param
+# 的 tz（若写），否则用全局 query.timezone。写了显式 default 则以 default 为准。
 #
 # 安全闸门：safe 默认 true —— 注册时校验 SQL 是单条只读 SELECT（拒 DML/DDL/多语句/
 # SELECT INTO），不通过则跳过该工具。个别确需特殊语句的可设 safe: false 关闭（运维自负）。
@@ -113,7 +119,8 @@ sql_tools: []
 #       GROUP BY country
 #       LIMIT 100
 #     params:
-#       - {name: date, type: date, format: "%Y-%m-%d", description: "事件日期"}
+#       # required: false 且无 default → 省略时默认取今天；timezone 覆盖全局 query.timezone
+#       - {name: date, type: date, format: "%Y-%m-%d", required: false, timezone: "America/Los_Angeles", description: "事件日期，默认今天(US 西部)"}
 #       - {name: country, type: enum, enum: ["US", "CA", "UK"], description: "国家码"}
 #     # max_rows: 5000           # 可选，覆盖全局 query.max_rows
 #     # safe: true               # 默认 true；个别特殊语句可设 false 关闭只读闸门

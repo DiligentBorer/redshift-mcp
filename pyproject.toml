@@ -15,6 +15,9 @@ dependencies = [
     "pyyaml>=6.0.1",
     "pydantic>=2.6.0",
     "sqlglot>=30.11.0,<31",
+    # 声明式 SQL 工具的可选 date 参数「省略取指定时区今天」依赖 zoneinfo；
+    # 最小化容器常缺系统 tz 数据库，带上 tzdata 保证任何环境可解析 IANA 时区名。
+    "tzdata>=2024.1",
 ]
 
 [project.scripts]

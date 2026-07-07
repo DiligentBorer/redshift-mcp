@@ -6,6 +6,7 @@ import os
 from functools import cached_property
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -72,12 +73,31 @@ class ServerConfig(BaseModel):
         return v
 
 
+def _validate_iana_tz(v: str) -> str:
+    """校验 IANA 时区名（用 ZoneInfo 试构造）；非法则抛中文 ValueError。"""
+    try:
+        ZoneInfo(v)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(
+            f"时区名非法: {v!r}，须为 IANA 名（如 America/Los_Angeles / Asia/Shanghai / UTC）。"
+        ) from exc
+    return v
+
+
 class QueryConfig(BaseModel):
     # 默认 60s —— 宽表上典型查询在未命中缓存耗时实测约 15s；
     # 60s 留有 ~4x 安全裕度，且能覆盖冷启动峰值。若集群 / WLM 倾向于把
     # 这种扫描密集查询排队，可调高；若想更快得到失败反馈，可调低。
     statement_timeout_ms: int = Field(default=60000, ge=1)
     max_rows: int = Field(default=10000, ge=1)
+    # 声明式 SQL 工具里可选 date 参数「省略取今天」时用的全局默认时区（IANA 名）；
+    # 可被 SqlToolParam.timezone 逐参数覆盖。默认 UTC，运维按业务时区设置。
+    timezone: str = "UTC"
+
+    @field_validator("timezone")
+    @classmethod
+    def _check_timezone(cls, v: str) -> str:
+        return _validate_iana_tz(v)
 
 
 class ColumnSpec(BaseModel):
@@ -156,6 +176,10 @@ class PluginsConfig(BaseModel):
 class SqlToolParam(BaseModel):
     """声明式 SQL 工具的单个参数（type/format/enum 用于注册时构造 schema + 调用时校验）。"""
 
+    # extra=forbid：param 上写了未知字段（拼错 / 旧字段名）在加载期直接报错，
+    # 不静默忽略再回退默认 —— 曾因参数级时区字段被静默丢弃导致取到错误时区。
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     type: Literal["string", "int", "date", "enum"] = "string"
     description: str | None = None
@@ -163,6 +187,9 @@ class SqlToolParam(BaseModel):
     format: str = "%Y-%m-%d"            # 仅 type=date 用，strptime 格式
     enum: list[str] | None = None       # type=enum 时必填非空
     default: str | int | None = None    # required=false 时的默认值
+    # 仅 type=date 用：覆盖全局 query.timezone 的参数级时区（IANA 名）；None 表示用全局默认。
+    # 决定「required=false 且未写 default 的 date 参数省略时」取哪个时区的今天。
+    timezone: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -171,6 +198,11 @@ class SqlToolParam(BaseModel):
         if not isinstance(v, str) or not v.isidentifier() or v.startswith("_"):
             raise ValueError(f"参数名必须是合法标识符且不以 '_' 开头: {v!r}")
         return v
+
+    @field_validator("timezone")
+    @classmethod
+    def _check_param_timezone(cls, v: str | None) -> str | None:
+        return None if v is None else _validate_iana_tz(v)
 
     @model_validator(mode="after")
     def _enum_required_when_enum_type(self) -> "SqlToolParam":

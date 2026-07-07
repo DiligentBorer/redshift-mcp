@@ -12,6 +12,7 @@ from redshift_mcp.config import (
     AppConfig,
     DatabaseConfig,
     LoggingConfig,
+    QueryConfig,
     ServerConfig,
     SqlToolParam,
     SqlToolSpec,
@@ -66,6 +67,26 @@ def test_sql_tool_param_enum_requires_values() -> None:
 def test_sql_tool_spec_defaults_safe_true() -> None:
     spec = SqlToolSpec(name="t", description="d", sql="SELECT 1")
     assert spec.safe is True and spec.params == [] and spec.max_rows is None
+
+
+def test_query_timezone_defaults_utc_and_validates() -> None:
+    assert QueryConfig().timezone == "UTC"
+    QueryConfig(timezone="America/Los_Angeles")             # 合法 IANA 名通过
+    with pytest.raises(ValidationError):
+        QueryConfig(timezone="Mars/Phobos")                 # 非法时区被拒
+
+
+def test_sql_tool_param_timezone_optional_and_validates() -> None:
+    assert SqlToolParam(name="d", type="date").timezone is None   # 默认 None（用全局）
+    SqlToolParam(name="d", type="date", timezone="Asia/Shanghai")  # 合法覆盖通过
+    with pytest.raises(ValidationError):
+        SqlToolParam(name="d", type="date", timezone="Nowhere/Land")
+
+
+def test_sql_tool_param_rejects_unknown_field() -> None:
+    # extra=forbid：写错字段名（如旧名 tz）在加载期直接报错，不静默忽略
+    with pytest.raises(ValidationError):
+        SqlToolParam(name="d", type="date", tz="Asia/Shanghai")
 
 
 def test_sql_tool_spec_rejects_bad_name_and_empty_sql() -> None:
