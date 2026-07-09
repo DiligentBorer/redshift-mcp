@@ -39,8 +39,10 @@ cp config.example.yaml config.yaml
 ```
 
 > 不想从源码装的话，也可从 [Releases 页面](https://github.com/DiligentBorer/redshift-mcp/releases)
-> 下载主包 `.whl` 直接 `uv pip install redshift_mcp-*.whl`（或 `pip install`）；
-> 或用现成的 GHCR 镜像，见下方「[用 Docker 运行](#用-docker-运行ghcr-镜像)」。
+> 下载 wheel：Release 同时附 `redshift_mcp-*.whl` 与 `redshift_mcp_sdk-*.whl`（后者是 host 的契约层依赖、
+> 未发 PyPI）。**两个 whl 放同一目录**后 `uv pip install --find-links . redshift-mcp`（或 `pip install`），
+> 其余依赖仍走 PyPI。只装 `redshift_mcp-*.whl` 会因解析不到 `redshift-mcp-sdk` 而失败。
+> 或用现成的 GHCR 镜像（自包含，无此步骤），见下方「[用 Docker 运行](#用-docker-运行ghcr-镜像)」。
 
 ## 运行
 

@@ -83,10 +83,12 @@ sudo -u redshift-mcp -H bash -lc '
 '
 
 # 2) 安装主程序 + 插件 wheel
+#    Release 同时附 redshift_mcp-*.whl 与契约层 redshift_mcp_sdk-*.whl(后者未发 PyPI)。把两者放同一目录,
+#    --find-links 让 host 依赖的 sdk 从本地解析(其余依赖走 PyPI)。只装 host wheel 会解析不到 sdk 而失败。
 sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
-  uv pip install /path/to/redshift_mcp-*.whl
-  uv pip install /path/to/your_plugin-*.whl   # 按需安装插件
+  uv pip install --find-links /path/to/wheels redshift-mcp   # 目录含 host + sdk 两个 whl
+  uv pip install /path/to/your_plugin-*.whl   # 按需;插件依赖的 sdk 上一步已装,可直接装
 '
 
 # 3) 验证安装
@@ -107,11 +109,11 @@ sudo -u redshift-mcp -H bash -lc '
 # 1) 创建 venv
 sudo -u redshift-mcp -H python3 -m venv /opt/redshift-mcp/.venv
 
-# 2) 安装主程序 + 插件 wheel
+# 2) 安装主程序 + 插件 wheel(host + 契约层 sdk 两个 whl 放同一目录;--find-links 让 sdk 从本地解析)
 sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
-  .venv/bin/pip install /path/to/redshift_mcp-*.whl
-  .venv/bin/pip install /path/to/your_plugin-*.whl   # 按需安装插件
+  .venv/bin/pip install --find-links /path/to/wheels redshift-mcp   # 目录含 host + sdk 两个 whl
+  .venv/bin/pip install /path/to/your_plugin-*.whl   # 按需;插件依赖的 sdk 上一步已装
 '
 
 # 3) 验证安装
@@ -425,8 +427,8 @@ tail -f /var/log/redshift-mcp/redshift-mcp.log
 # 拿到新版本 wheel 后直接重装
 sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
-  uv pip install --force-reinstall /path/to/redshift_mcp-新版本.whl
-  # 纯 pip 等效: .venv/bin/pip install --force-reinstall /path/to/redshift_mcp-新版本.whl
+  uv pip install --force-reinstall --find-links /path/to/wheels redshift-mcp   # 目录含 host + sdk 两个 whl
+  # 纯 pip 等效: .venv/bin/pip install --force-reinstall --find-links /path/to/wheels redshift-mcp
   uv pip install --force-reinstall /path/to/your_plugin-新版本.whl  # 按需（业务插件）
 '
 sudo systemctl restart redshift-mcp
@@ -439,7 +441,7 @@ sudo systemctl status redshift-mcp
 # 用上一版本的 wheel 重装
 sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
-  uv pip install --force-reinstall /path/to/redshift_mcp-旧版本.whl
+  uv pip install --force-reinstall --find-links /path/to/wheels redshift-mcp   # 目录含 host + sdk 两个 whl
   uv pip install --force-reinstall /path/to/your_plugin-旧版本.whl  # 按需（业务插件）
 '
 sudo systemctl restart redshift-mcp
