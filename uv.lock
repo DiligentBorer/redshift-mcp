@@ -842,7 +842,7 @@ wheels = [
 
 [[package]]
 name = "redshift-mcp"
-version = "0.3.6"
+version = "0.3.7"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
@@ -885,7 +885,7 @@ dev = [
 
 [[package]]
 name = "redshift-mcp-sdk"
-version = "0.3.6"
+version = "0.3.7"
 source = { editable = "sdk" }
 
 [package.optional-dependencies]

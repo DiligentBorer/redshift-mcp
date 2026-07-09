@@ -1,6 +1,6 @@
 [project]
 name = "redshift-mcp-sdk"
-version = "0.3.6"
+version = "0.3.7"
 description = "redshift-mcp 插件契约层 SDK：PluginContext + errors（供外部插件依赖，不含 host 实现源码）"
 readme = "README.md"
 license = "MIT"

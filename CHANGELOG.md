@@ -3,6 +3,18 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.7] - 2026-07-09
+
+修复公共 Release 只附 host wheel、下载后装不上的问题(0.3.6 抽 SDK 引入),升 patch。
+
+### Fixed
+
+- **Release 一并发布 `redshift-mcp-sdk` wheel**:host 的 `Requires-Dist` 依赖 `redshift-mcp-sdk`
+  而它未发 PyPI;0.3.6 的 Release 只附 host wheel,下载后 `pip install redshift_mcp-*.whl` 会因
+  解析不到 sdk 而失败。`release.yaml` 改为同时 `uv build --package redshift-mcp-sdk`,两个 wheel/sdist
+  一并附到 GitHub Release;README / DEPLOY 的 wheel 安装(含升级/回滚)改为把两者放同一目录后
+  `uv pip install --find-links <目录> redshift-mcp`。GHCR 镜像不受影响(本就自包含)。
+
 ## [0.3.6] - 2026-07-08
 
 抽出插件契约层 SDK `redshift-mcp-sdk`,并**移除仓内 demo 插件**:host 收敛为「通用 Redshift MCP
