@@ -3,6 +3,36 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.6] - 2026-07-08
+
+抽出插件契约层 SDK `redshift-mcp-sdk`,并**移除仓内 demo 插件**:host 收敛为「通用 Redshift MCP
+server + 插件框架」,所有业务插件都是外部独立包。host / sdk 版本统一为 0.3.6。
+
+### Added
+
+- **新增 workspace 成员 `sdk/`(distribution `redshift-mcp-sdk`)**:插件契约层(`PluginContext` /
+  `GROUP` / `errors`)从 host 抽出成独立薄包,外部插件只 `from redshift_mcp_sdk import PluginContext`
+  即可,不引入 host 实现源码。SDK 暴露 `__version__`;psycopg 为可选 extra(缺失时 `DB_RUNTIME_ERRORS`
+  守卫式降级)。host 的 `redshift_mcp.plugin` / `redshift_mcp.errors` 从 SDK re-export 同一对象作 back-compat。
+- **host 启动期 SDK 版本断言**:`server._check_sdk_version()` 在装了低于 `_MIN_SDK_VERSION` 的旧 SDK
+  时启动即报清晰中文错误并退出(exit code 4),而非等到插件 register 时才 `AttributeError`。
+
+### Removed
+
+- **移除仓内 demo 插件 `plugins/complex/`(及其一切痕迹)**:host 不再夹带任何 in-repo 插件。业务插件
+  改由**外部独立仓**维护(自带 gitignored 业务 SQL、自建 wheel、`uv pip install` 进 host venv 即被
+  entry_points 发现)。`[tool.uv.workspace] members` 收敛为 `["sdk"]`,`testpaths` 收敛为 `["tests"]`。
+  Dockerfile 去掉插件捆绑分支(`INSTALL_*` build-arg),镜像纯 host;插件由外部 wheel 事后装入。
+  > 升级须知:若此前依赖仓内 demo 插件,请改用对应的外部插件包 `uv pip install`。
+
+### Changed
+
+- **host 依赖 SDK 用区间 `redshift-mcp-sdk>=0.3,<1.0`**:下限=构建时契约版本、上限=下一主版本
+  (SDK 主版本内严格向后兼容),让共享 venv 里 SDK 安全上浮、不兼容在安装期即暴露。host 新增显式依赖
+  `packaging>=21`(启动断言做版本比较用)。
+- **Dockerfile**:runtime 安装补 `--find-links /tmp/dist`,让本地 `redshift-mcp-sdk` wheel 可解析
+  (SDK 未发 PyPI,host 的 `Requires-Dist` 含它);`--all-packages` 现只产出 host + sdk 两个 wheel。
+
 ## [0.3.5] - 2026-07-07
 
 声明式 SQL 工具增强:可选 date 参数默认取当前时区今天 + 占位符声明校验,升 patch。

@@ -69,7 +69,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       # 构建主包 wheel + sdist,附到 GitHub Release 供直接下载
-      # (complex 插件含 gitignored 业务 SQL,不公开分发,故只打主包)
+      # (host 只打主包;业务插件均为外部独立仓、各自发布,不在本仓构建)
       - name: 安装 uv
         uses: astral-sh/setup-uv@v8.2.0
 

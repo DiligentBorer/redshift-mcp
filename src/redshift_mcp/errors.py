@@ -1,51 +1,12 @@
-"""共享异常定义与错误处理控制流。
+"""共享异常定义（back-compat re-export）。
 
-这是一个**零依赖叶子模块**：只 import 标准库 + psycopg，不 import 本项目任何
-其它模块。把 ``DB_RUNTIME_ERRORS`` 与 ``db_errors_as_client_error`` 放在这里（而不是
-``server.py``），是为了让外部插件能复用同一组「DB / 运行时错误」分类与异常包装控制流，
-而**不必 import ``server.py``** —— 否则会形成 server → plugin → 插件 → server 的循环依赖。
+``DB_RUNTIME_ERRORS`` 与 ``db_errors_as_client_error`` 已抽到契约层 SDK
+``redshift_mcp_sdk.errors``（让 host 与外部插件共享同一份、插件不必 import host 源码）。
+host 从那里**别名 re-export**，保证既有 ``from redshift_mcp.errors import ...`` 与「同一对象」
+身份断言（如 ``ctx.db_runtime_errors is DB_RUNTIME_ERRORS``）不变。
 """
 from __future__ import annotations
 
-import contextlib
-import logging
-from typing import AsyncIterator
+from redshift_mcp_sdk.errors import DB_RUNTIME_ERRORS, db_errors_as_client_error
 
-import psycopg
-
-# 工具 / 插件在调用 DB 的路径上，应把这一组「DB / 运行时错误」包装成带 rid 的
-# RuntimeError 抛给客户端，但**不**吞掉编程错误（TypeError / KeyError / sqlglot
-# 内部断言等）—— 让那些 bug 类异常原样冒泡，由 FastMCP 包成 500，便于早暴露。
-DB_RUNTIME_ERRORS: tuple[type[BaseException], ...] = (
-    psycopg.Error,
-    RuntimeError,
-    ConnectionError,
-    TimeoutError,
-)
-
-
-@contextlib.asynccontextmanager
-async def db_errors_as_client_error(
-    *,
-    logger: logging.Logger,
-    operation: str,
-    rid: str,
-    db_errors: tuple[type[BaseException], ...] = DB_RUNTIME_ERRORS,
-) -> AsyncIterator[None]:
-    """async 上下文管理器：把 ``db_errors`` 范围内的异常包成带 rid 的 ``RuntimeError``。
-
-    捕获到属于 ``db_errors`` 的异常时：记一条带完整 traceback 的 ``logger.exception``，再抛出
-    面向客户端的精简 ``RuntimeError``（含 ``request_id`` 可追溯字段，不泄漏堆栈 / SQL / 凭证）；
-    **不在 ``db_errors`` 内的异常（``TypeError`` / ``KeyError`` 等编程错误）原样冒泡**，便于早暴露。
-
-    供插件经 ``PluginContext.db_errors`` 复用，免去每个插件重抄「取 rid → try/except → 包 rid」
-    样板。host 内建工具（``run_sql`` / ``describe_table``）保留各自的 bespoke 处理，不走本 CM。
-    """
-    try:
-        yield
-    except db_errors as exc:
-        logger.exception("%s 失败", operation)
-        raise RuntimeError(
-            f"{operation} 失败 (request_id={rid}, 详见服务端日志): "
-            f"{exc.__class__.__name__}"
-        ) from exc
+__all__ = ["DB_RUNTIME_ERRORS", "db_errors_as_client_error"]

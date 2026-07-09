@@ -1,6 +1,6 @@
 [project]
 name = "redshift-mcp"
-version = "0.3.5"
+version = "0.3.6"
 description = "通用 Redshift MCP Server（Streamable HTTP）+ 插件框架：三件套通用查询工具 + entry_points / 声明式 SQL 扩展"
 readme = "README.md"
 license = "MIT"
@@ -18,6 +18,13 @@ dependencies = [
     # 声明式 SQL 工具的可选 date 参数「省略取指定时区今天」依赖 zoneinfo；
     # 最小化容器常缺系统 tz 数据库，带上 tzdata 保证任何环境可解析 IANA 时区名。
     "tzdata>=2024.1",
+    # 插件契约层 SDK：host 自己也从 redshift_mcp_sdk import PluginContext / GROUP 来构造并注入。
+    # 契约与实现同仓分包（sdk/ workspace 成员），外部插件只依赖它、不引入 host 实现源码。
+    # 下限=构建时契约版本，上限=下一主版本：SDK 主版本内严格向后兼容，故上浮安全、破坏性变更必升主版本。
+    "redshift-mcp-sdk>=0.3,<1.0",
+    # host 启动期对已装 SDK 做最低版本断言（server._check_sdk_version），用 packaging 做版本比较。
+    # 显式声明而非依赖传递，避免上游偶然移除后 host 静默失去该能力。
+    "packaging>=21",
 ]
 
 [project.scripts]
@@ -45,17 +52,16 @@ dev = [
     "httpx2",   # required by starlette.testclient（starlette>=1.3 起改用 httpx2，用 httpx 会触发弃用警告）
 ]
 
-# uv workspace（monorepo）：plugins/ 下每个目录都是一个 workspace 成员包（通配，新增插件无需逐个声明）。
-# 自带插件靠 `uv sync --all-packages` 一并 editable 装上，使其 entry-point 在开发期生效。
-# 第三方插件不碰这里：自建 wheel、`uv pip install` 进同一 venv 即被 entry_points 自动发现加载。
+# uv workspace（monorepo）：sdk/ 是插件契约层 SDK 包，也是唯一的 workspace 成员。
+# 插件全为外部独立仓（不在本仓内），靠自建 wheel、`uv pip install` 进同一 venv 后被
+# entry_points 自动发现加载 —— host 不夹带任何 in-repo 插件。
 [tool.uv.workspace]
-members = ["plugins/*"]
+members = ["sdk"]
 
-# 各成员包对宿主 redshift-mcp 的依赖走本地 workspace（按包名匹配，一条覆盖所有成员，无需逐插件写）。
+# host 对本地 SDK 的依赖走 workspace 源（按包名匹配）。host 只依赖 redshift-mcp-sdk（契约层）。
 [tool.uv.sources]
-redshift-mcp = { workspace = true }
+redshift-mcp-sdk = { workspace = true }
 
 [tool.pytest.ini_options]
-# plugins/*/tests 通配纳入各插件自带测试（pytest≥7 支持 testpaths glob），新增插件无需登记。
-testpaths = ["tests", "plugins/*/tests"]
+testpaths = ["tests"]
 asyncio_mode = "auto"
