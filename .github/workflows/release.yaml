@@ -68,14 +68,19 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      # 构建主包 wheel + sdist,附到 GitHub Release 供直接下载
-      # (host 只打主包;业务插件均为外部独立仓、各自发布,不在本仓构建)
+      # 构建 host 主包 + sdk 契约包的 wheel + sdist,附到 GitHub Release 供直接下载。
+      # 必须一并发 sdk:host 的 Requires-Dist 依赖 redshift-mcp-sdk,而它不在 PyPI;
+      # 只发 host wheel 的话,下载后 `pip install redshift_mcp-*.whl` 会因解析不到 sdk 而失败。
+      # 两个 wheel 同放一目录后 `uv pip install --find-links <目录> redshift-mcp` 即可(见 README/DEPLOY)。
+      # 业务插件是外部独立仓、各自发布,不在本仓构建。
       - name: 安装 uv
         uses: astral-sh/setup-uv@v8.2.0
 
-      - name: 构建主包 wheel + sdist
-        run: uv build --package redshift-mcp
-        # 产物落在 dist/redshift_mcp-<ver>-py3-none-any.whl 与 dist/redshift_mcp-<ver>.tar.gz
+      - name: 构建 host 主包 + sdk 契约包 wheel + sdist
+        run: |
+          uv build --package redshift-mcp
+          uv build --package redshift-mcp-sdk
+        # 产物:dist/redshift_mcp-<ver>-*.whl(+tar.gz) 与 dist/redshift_mcp_sdk-<ver>-*.whl(+tar.gz)
 
       - name: 创建 Release 并附上 wheel/sdist
         uses: softprops/action-gh-release@v3
