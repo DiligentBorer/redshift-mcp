@@ -1,4 +1,4 @@
-# 构建上下文忽略。注意:pyproject.toml / uv.lock / src / plugins / *.example.* 必须保留(打包与测试要用)。
+# 构建上下文忽略。注意:pyproject.toml / uv.lock / src / sdk / plugins / *.example.* 必须保留(打包与测试要用)。
 
 # 版本控制与工具状态
 .git

@@ -10,8 +10,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import redshift_mcp_sdk
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from packaging.version import Version
 
 from . import __version__, db, sql_guard
 from .config import AppConfig, LoggingConfig, load_config, split_table_ref
@@ -421,6 +423,25 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+# host 要求的最低 SDK 契约版本（与 pyproject 里 redshift-mcp-sdk>= 下限保持一致）。
+# SDK 主版本内严格向后兼容，故只需断言"不低于"；低于它说明装了不兼容旧 SDK。
+_MIN_SDK_VERSION = "0.3"
+
+
+def _check_sdk_version() -> None:
+    """断言已装 ``redshift-mcp-sdk`` 不低于 host 要求的最低契约版本。
+
+    这是对打包层"约束求交"的运行期补强（defense in depth）：即便有人绕过依赖约束
+    手工装了不兼容旧 SDK，也在启动瞬间抛清晰错误，而非等到插件 register 时才 AttributeError。
+    """
+    installed = redshift_mcp_sdk.__version__
+    if Version(installed) < Version(_MIN_SDK_VERSION):
+        raise RuntimeError(
+            f"redshift-mcp-sdk 版本过低：已装 {installed}，host 要求 >= {_MIN_SDK_VERSION}。"
+            "请升级 redshift-mcp-sdk 后重试。"
+        )
+
+
 def _print_installed_plugins() -> int:
     """打印已装插件 ``ep.name / distribution / version`` 到 stdout（供 ``--list-plugins``）。
 
@@ -451,6 +472,14 @@ def main(argv: list[str] | None = None) -> int:
         level="INFO",
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+
+    # 0.5) SDK 契约版本闸门：装了不兼容旧 SDK 时启动期即报错退出（见 _check_sdk_version）。
+    try:
+        _check_sdk_version()
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        return 4
+
     try:
         _cfg = load_config(args.config)
     except Exception as exc:

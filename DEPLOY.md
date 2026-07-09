@@ -86,7 +86,7 @@ sudo -u redshift-mcp -H bash -lc '
 sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
   uv pip install /path/to/redshift_mcp-*.whl
-  uv pip install /path/to/redshift_mcp_complex-*.whl   # 按需安装插件
+  uv pip install /path/to/your_plugin-*.whl   # 按需安装插件
 '
 
 # 3) 验证安装
@@ -111,7 +111,7 @@ sudo -u redshift-mcp -H python3 -m venv /opt/redshift-mcp/.venv
 sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
   .venv/bin/pip install /path/to/redshift_mcp-*.whl
-  .venv/bin/pip install /path/to/redshift_mcp_complex-*.whl   # 按需安装插件
+  .venv/bin/pip install /path/to/your_plugin-*.whl   # 按需安装插件
 '
 
 # 3) 验证安装
@@ -135,11 +135,11 @@ git clone <你的仓库地址> /tmp/redshift-mcp-src
 cd /tmp/redshift-mcp-src
 uv sync --all-packages
 uv build --package redshift-mcp
-uv build --package redshift-mcp-complex   # 按需构建插件
+# 业务插件在各自的独立仓构建 wheel（本仓不含插件）
 # 把 dist/ 下的 .whl 文件传到生产服务器，然后走方式一安装
 ```
 
-> **提示**：如果插件自带外部配置（如 `complex` 的业务 SQL），见该插件 README —— 它自行从约定路径 / env var 加载，未配置则启动时报错跳过该插件（不影响其余工具）。
+> **提示**：如果插件自带外部配置（如某业务插件的业务 SQL），见该插件 README —— 它自行从约定路径 / env var 加载，未配置则启动时报错跳过该插件（不影响其余工具）。
 
 ### 部署额外插件
 
@@ -158,7 +158,7 @@ sudo systemctl restart redshift-mcp
 启动后 `journalctl` 里会出现插件注册日志。临时禁用某个已装插件，
 在 `config.yaml` 设 `plugins.disabled: ["<name>"]` 后重启即可。
 
-> 若插件自带外部配置（如 `complex` 的业务 SQL），见该插件 README —— 它自行从约定路径 /
+> 若插件自带外部配置（如某业务插件的业务 SQL），见该插件 README —— 它自行从约定路径 /
 > env var 加载，未配置则启动时报错跳过该插件（不影响其余工具）。
 
 ### 声明式 SQL 工具（零代码）+ 配置拆分
@@ -218,7 +218,7 @@ query:
 
 plugins:
   enabled: true                 # false => 整体跳过插件加载
-  disabled: []                  # 已安装但想临时禁用的插件名，例: ["complex"]
+  disabled: []                  # 已安装但想临时禁用的插件名，例: ["<plugin>"]
 
 logging:
   level: INFO
@@ -289,8 +289,8 @@ sudo journalctl -u redshift-mcp -f --since "1 min ago"
 
 - `日志配置完成: level=INFO sql_audit_level=WARNING ... file=/var/log/redshift-mcp/redshift-mcp.log ...`
 - `Redshift 连接池就绪 (host=... statement_timeout_ms=60000 ...)`
-- `插件已加载: complex (redshift_mcp_complex:register)`
-- `插件加载完成，共 1 个: complex` / `插件注册完成: ['complex']`
+- `插件已加载: <name> (<import_pkg>:register)`（每装一个业务插件一行；未装则无此行）
+- `插件加载完成，共 N 个: <name>...`（N=0 时为 `(无)`）
 - `声明式 SQL 工具加载完成，共 N 个: ...` / `声明式 SQL 工具: [...]`（N=0 时为 `(无)`）
 - `启动 redshift-mcp，监听 http://127.0.0.1:8000/redshift`
 - `Uvicorn running on http://127.0.0.1:8000`
@@ -427,7 +427,7 @@ sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
   uv pip install --force-reinstall /path/to/redshift_mcp-新版本.whl
   # 纯 pip 等效: .venv/bin/pip install --force-reinstall /path/to/redshift_mcp-新版本.whl
-  uv pip install --force-reinstall /path/to/redshift_mcp_complex-新版本.whl  # 按需
+  uv pip install --force-reinstall /path/to/your_plugin-新版本.whl  # 按需（业务插件）
 '
 sudo systemctl restart redshift-mcp
 sudo systemctl status redshift-mcp
@@ -440,7 +440,7 @@ sudo systemctl status redshift-mcp
 sudo -u redshift-mcp -H bash -lc '
   cd /opt/redshift-mcp
   uv pip install --force-reinstall /path/to/redshift_mcp-旧版本.whl
-  uv pip install --force-reinstall /path/to/redshift_mcp_complex-旧版本.whl  # 按需
+  uv pip install --force-reinstall /path/to/your_plugin-旧版本.whl  # 按需（业务插件）
 '
 sudo systemctl restart redshift-mcp
 ```

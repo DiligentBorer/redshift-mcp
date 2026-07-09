@@ -4,7 +4,7 @@
 
 ## 工具
 
-核心暴露 **3 个通用查询工具**；业务工具通过两种插件机制提供 —— ① 自带的 `redshift-mcp-complex` 这类 **Python 插件**（entry_points 装进同一 venv 即自动发现），② 直接在 `config.yaml` 的 `sql_tools:` 段**声明式注册 SQL 工具**（零代码）。详见下方「[插件系统](#插件系统)」。
+核心暴露 **3 个通用查询工具**；业务工具通过两种插件机制提供 —— ① **外部独立包形式的 Python 插件**（entry_points 装进同一 venv 即自动发现，本仓不夹带任何插件），② 直接在 `config.yaml` 的 `sql_tools:` 段**声明式注册 SQL 工具**（零代码）。详见下方「[插件系统](#插件系统)」。
 
 ### 通用查询三件套（受 `config.yaml` 白名单约束）
 
@@ -16,14 +16,14 @@
   解析 AST 强制校验**：只允许单条 SELECT、所有引用表 schema-qualified 且在白名单内、
   自动追加 `LIMIT max_rows + 1`。任何 DML / DDL / SET / 多语句一律拒绝。
 
-### 业务插件工具（随仓库自带 `redshift-mcp-complex`）
+### 业务插件工具（由外部 Python 插件提供，示例）
+
+本仓不含任何业务工具；它们由**外部独立插件包**装进同一 venv 后提供。一个典型的插件工具长这样：
 
 - **`query_error_api_by_date(date: str)`** —— `date` 为 `YYYY-MM-DD` 格式，返回
-  `{date, count, truncated, rows: [{client_ip, device_count}, ...]}`，按 `device_count` 降序。
-  由插件包 `redshift-mcp-complex`（`plugins/complex/`）提供，**SQL 由插件自有 `config.yaml`
-  提供**（插件按 `env var > 包内约定路径` 自行加载，见 `_config.py`；仓库只提交模板
-  `queries/error_api.example.sql`），命名占位符 `%(event_date)s` / `%(limit)s`。不受表白名单约束。
-  实际 SQL 见插件包内 `plugins/complex/.../queries/`（`LIKE` 字面 `%` 写成 `%%` 以避开 psycopg3 占位符扫描）。
+  `{count, truncated, rows: [{client_ip, device_count}, ...]}`，按 `device_count` 降序。
+  这类工具的 **SQL 由插件自有 `config.yaml` 提供**（插件按 `env var > 包内约定路径` 自行加载），
+  用命名占位符 `%(event_date)s` / `%(limit)s`，不受 host 表白名单约束。想自己写一个见下方「[插件系统](#插件系统)」。
 
 
 ## 安装
@@ -33,7 +33,7 @@
 ```bash
 git clone <你的仓库地址>
 cd McpRedshift
-uv sync --all-packages    # 主程序 + plugins/* 下所有插件一并 editable 装好
+uv sync --all-packages    # 主程序 + sdk（契约层）一并 editable 装好
 cp config.example.yaml config.yaml
 # 编辑 config.yaml：填入 Redshift host/dbname/user/password 与 auth_token
 ```
@@ -107,10 +107,9 @@ docker run -d --name redshift-mcp \
 - 非 root（uid 10001）运行；自带 TCP HEALTHCHECK（服务无独立 health 端点且需 Bearer，
   故探活只测端口连通性）。
 - tag 选择：生产钉具体版本（`:0.3.0` 或 `:0.3`），`:latest` 仅尝鲜。
-- **公共镜像只含通用三件套 + 随 `config.yaml` 的声明式 `sql_tools`，不内置 `complex` 等
-  Python 插件**。需要 complex：① 自建镜像
-  `docker build --target runtime --build-arg INSTALL_COMPLEX=1 -t redshift-mcp:complex .`
-  （需本地有插件真实 config/SQL）；或 ② 以本镜像为基础再 `uv pip install redshift_mcp_complex-*.whl`。
+- **镜像只含通用三件套 + 随 `config.yaml` 的声明式 `sql_tools`，不内置任何 Python 插件**。
+  需要某个业务插件：以本镜像为基础再 `uv pip install <your_plugin>-*.whl`（装进 `/app/.venv`，
+  靠 entry_points 自动发现，无需改 host 配置）。
 
 最小 `docker-compose.yaml`：
 
@@ -129,7 +128,7 @@ services:
 
 核心包 `src/redshift_mcp/` 不含任何业务 SQL。扩展工具有**两种机制**：
 
-- **① Python 插件（entry_points）** —— 写代码的全功能插件，独立可安装包，装进同一 venv 即自动发现（**不需要改 host 任何配置**）。**插件私有配置内聚在插件内部**：插件如需外部配置（如自带 `complex` 的业务 SQL），自带一个 `config.yaml`（结构与 host 同构）并自行加载（`env var > 包内约定路径`），host `config.yaml` 不承载插件配置。
+- **① Python 插件（entry_points）** —— 写代码的全功能插件，独立可安装包，装进同一 venv 即自动发现（**不需要改 host 任何配置**）。**插件私有配置内聚在插件内部**：插件如需外部配置（如业务 SQL），自带一个 `config.yaml`（结构与 host 同构）并自行加载（`env var > 包内约定路径`），host `config.yaml` 不承载插件配置。
 - **② 声明式 SQL 工具（零代码）** —— 直接在 `config.yaml` 的 `sql_tools:` 里声明 `{name, description, sql, params}`，启动自动注册成 MCP 工具。适合简单 SQL。
 
 ### 方式一：写一个 Python 插件
@@ -144,7 +143,7 @@ services:
 2. 暴露 `register(ctx: PluginContext) -> None`，在其中用 `ctx.mcp.tool()` 注册工具：
 
    ```python
-   from redshift_mcp.plugin import PluginContext
+   from redshift_mcp_sdk import PluginContext   # 只依赖薄契约层 SDK，不引入 host 实现源码
 
    def register(ctx: PluginContext) -> None:
        @ctx.mcp.tool()
@@ -161,21 +160,19 @@ services:
                )
    ```
 
-`PluginContext`（`redshift_mcp.plugin`）提供 `mcp` / `config` / `logger` / `sql_audit_logger` / `request_id_var` / `get_pool` / `aexecute` / `db_runtime_errors` / `plugin_name`，外加方法 `db_errors(operation="查询", *, logger=None)`，是稳定的公开 API。`aexecute`（= host 的 `db.aexecute`）是插件执行只读查询的**首选入口**；`get_pool` 保留给需要自管连接的特殊场景；`plugin_name` 是本插件的 entry-point 名（用于 `source` / 子 logger，避免硬编码自名）。`db_errors` 的 `operation` 是面向客户端/日志的「什么失败了」标签，默认中性的「查询」即可——**不必放工具名**：客户端错误里的工具名由 FastMCP 的 `Error executing tool <name>:` 前缀自动提供。完整参考实现见 `plugins/complex/`。
+`PluginContext` 由薄契约层 SDK `redshift-mcp-sdk`（`from redshift_mcp_sdk import PluginContext`）提供，是稳定的公开契约——**外部插件只依赖它、不引入 host 实现源码**（host 内 `redshift_mcp.plugin` 亦 re-export 同一对象作 back-compat）。它提供 `mcp` / `config` / `logger` / `sql_audit_logger` / `request_id_var` / `get_pool` / `aexecute` / `db_runtime_errors` / `plugin_name`，外加方法 `db_errors(operation="查询", *, logger=None)`。`aexecute`（= host 的 `db.aexecute`）是插件执行只读查询的**首选入口**；`get_pool` 保留给需要自管连接的特殊场景；`plugin_name` 是本插件的 entry-point 名（用于 `source` / 子 logger，避免硬编码自名）。`db_errors` 的 `operation` 是面向客户端/日志的「什么失败了」标签，默认中性的「查询」即可——**不必放工具名**：客户端错误里的工具名由 FastMCP 的 `Error executing tool <name>:` 前缀自动提供。
 
 ### 安装与启用
 
 ```bash
-# monorepo（uv workspace）开发期：--all-packages 把 plugins/* 下所有插件 editable 装好
-uv sync --all-packages
-
-# 或单独打包后装进与主程序同一个 venv（第三方插件即走这条，零 host 改动）
-uv build --package redshift-mcp-complex
-uv pip install dist/redshift_mcp_complex-*.whl
+# 插件是独立包：在其自己的仓库构建 wheel，装进与主程序同一个 venv（零 host 改动）
+uv build                                    # 在插件仓执行
+uv pip install dist/<your_plugin>-*.whl     # 装进 host 的 venv
 ```
 
-启动日志会打印「插件已加载: complex (...)」。临时禁用某个已安装插件：`config.yaml` 里
-`plugins.disabled: ["complex"]`；整体关闭：`plugins.enabled: false`。
+启动日志会打印「插件已加载: <name> (...)」。临时禁用某个已安装插件：`config.yaml` 里
+`plugins.disabled: ["<name>"]`；整体关闭：`plugins.enabled: false`。用 `redshift-mcp --list-plugins`
+查看已装插件名。
 
 ### 方式二：声明式 SQL 工具（零代码）
 
@@ -233,7 +230,7 @@ npx @modelcontextprotocol/inspector
   - `list_tables` —— 无参数；返回当前白名单
   - `describe_table` —— `table="analytics.events"`（需在 `tables` 白名单内）
   - `run_sql` —— 例如 `sql="SELECT client_ip FROM analytics.events WHERE event_date='2026-05-20' LIMIT 10"`
-  - `query_error_api_by_date` —— `date="2026-05-20"`（由自带 `complex` 插件提供，默认已加载）
+  - 若装了业务插件，其工具也会出现在这里（如 `query_error_api_by_date` —— `date="2026-05-20"`）
 
 ## 安全注意事项
 

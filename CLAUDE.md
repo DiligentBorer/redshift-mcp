@@ -19,7 +19,7 @@
 | `list_tables()` | 核心 / 通用三件套 | 列 `config.yaml` 白名单中所有允许查询的表 |
 | `describe_table(table)` | 核心 / 通用三件套 | 拿表的列定义（`SVV_COLUMNS`）+ config 中的列说明叠加 |
 | `run_sql(sql)` | 核心 / 通用三件套 | 受 sqlglot AST 校验约束的单条 SELECT 执行 |
-| `query_error_api_by_date(date)` | **插件** `redshift-mcp-complex` | 在 **Amazon Redshift** 上跑一段固定 SQL，返回 IP 维度的 Error API 统计 |
+| （业务工具，如 `query_error_api_by_date(date)`） | **外部 Python 插件** | 由外部独立插件包提供（本仓不夹带），装进同一 venv 后 entry_points 自动发现 |
 
 通过 PostgreSQL wire protocol（`psycopg3`）连接 Redshift。通用三件套受 `config.yaml` 的 `tables` 白名单约束（详见 "通用查询能力" 段）；插件工具不受白名单约束（SQL 由插件**自有 `config.yaml`** 提供，见 "插件系统" 段）。插件机制详见 "插件系统" 段。
 
@@ -51,9 +51,9 @@ uv run pytest tests/test_plugin_loader.py -v
 # 插件工具要 main() 跑过 load_plugins 才注册，见 "插件系统" 段）
 uv run python -c "from redshift_mcp.server import mcp; print(mcp.name)"
 
-# 单独打包主程序 / 插件成 wheel
+# 单独打包主程序 / 契约层 SDK 成 wheel（插件是外部独立仓，各自打包）
 uv build --package redshift-mcp
-uv build --package redshift-mcp-complex
+uv build --package redshift-mcp-sdk
 ```
 
 Python 通过 `.python-version` **锁定到 3.13**；uv 首次 sync 时会自动下载解释器。`pyproject.toml` 里 `requires-python = ">=3.10"` 故意比 `.python-version` 宽松。
@@ -65,22 +65,24 @@ Python 通过 `.python-version` **锁定到 3.13**；uv 首次 sync 时会自动
 ```
 config.py (pydantic 模型 + tables 白名单 + PluginsConfig)
    ↓
-errors.py (DB_RUNTIME_ERRORS 共享异常元组；零依赖叶子，防循环依赖)
+redshift_mcp_sdk (契约层薄包 sdk/：PluginContext + GROUP + errors；零第三方依赖叶子，谁都不 import)
+   ↓
+errors.py (从 redshift_mcp_sdk.errors re-export DB_RUNTIME_ERRORS，back-compat；同一对象)
    ↓
 db.py (psycopg 连接池 + get_pool / execute / aexecute / _select / fetch_table_columns / fetch_table_info)
    ↑
 sql_guard.py (assert_read_only 只读校验 + validate_select_only 叠加白名单 + apply_row_cap)
    ↓
-plugin.py (PluginContext 宿主→插件契约 + load_plugins 的 entry_points 加载器)
+plugin.py (从 redshift_mcp_sdk re-export PluginContext/GROUP 作 back-compat + load_plugins 的 entry_points 加载器)
    ↓
 sql_tools.py (register_sql_tools：读 config.sql_tools，safe 时过只读闸门，动态构造签名注册)
    ↓
 middleware.py (HTTP 接入层：request_id_var + RequestIdFilter + RequestIdMiddleware + BearerAuthMiddleware
                + initialize body 辅助；只依赖 stdlib/starlette/mcp，不 import server，防循环依赖)
    ↓
-server.py (FastMCP + 挂 middleware.py 的中间件 + 3 个通用 @mcp.tool + main() 里 load_plugins + register_sql_tools)
+server.py (FastMCP + 挂 middleware.py 的中间件 + 3 个通用 @mcp.tool + main() 里 _check_sdk_version + load_plugins + register_sql_tools)
    ↓
-plugins/complex/ (独立可安装包 redshift-mcp-complex，SQL 由插件自有 config.yaml 提供，见 _config.py)
+（外部插件：独立可安装包，只依赖 redshift-mcp-sdk，装进同一 venv 后被 load_plugins 的 entry_points 发现）
 ```
 
 只有 `server.py` 的 `main()` 把所有东西串起来：`load_plugins` 在 `db.init_pool()` 之后、`mcp.streamable_http_app()` 之前运行（FastMCP 的 list_tools 实时读取、不快照，所以此时注册的插件工具下一次 list_tools 即可见）。`db.py` / `config.py` / `sql_guard.py` / `errors.py` / `plugin.py` / `middleware.py` 对 MCP 业务一无所知。`sql_guard.py` 完全无副作用（不连 DB），只做 AST 解析 / 校验 / 改写，便于单测全离线。**`request_id_var` 住在 `middleware.py`（不在 `server.py`）**：它被中间件 / `RequestIdFilter` / 工具 / `PluginContext` 共用，留在 server 会与「server import 中间件挂载」成环，故与中间件同模块。
@@ -152,7 +154,7 @@ plugins/complex/ (独立可安装包 redshift-mcp-complex，SQL 由插件自有 
 
 1. **`psycopg._encodings.py_codecs[b"UNICODE"] = "utf-8"`** 位于 `db.py` 顶部。Redshift 把 `client_encoding` 报成 PG 7.x 遗留的名字 `UNICODE`，psycopg3 的 codec 表不认识 —— 没有这条 monkey-patch，任何借出的连接**第一次** `cur.execute()` 都会抛 `NotSupportedError: codec not available in Python: 'UNICODE'`。
 
-2. **LIKE 模式中的 `%%`（双百分号）转义**。complex 的 SQL 由插件自有 `config.yaml` 提供（命名占位符 `%(event_date)s` / `%(limit)s`），仓库模板见 `plugins/complex/src/redshift_mcp_complex/queries/error_api.example.sql`。因为 SQL 通过 `cur.execute(sql, {...})` 调用，psycopg3 会扫描 `%X` 当作占位符 —— 字面量 `%localhost%` 会被读成 `%l`（非法占位符），psycopg3 抛 `ProgrammingError: only '%s', '%b', '%t' are allowed as placeholders`。`plugins/complex/tests/test_sql_template.py` 守护这条坑（直接 `importlib.resources` 读那份**模板** `.sql`，连注释里都不能出现裸 `%`）。**声明式 SQL 工具（`sql_tools`）的 SQL 同样经 `cur.execute(sql, {...})` 跑，LIKE 字面 `%` 也必须写成 `%%`**。
+2. **LIKE 模式中的 `%%`（双百分号）转义**。凡经 `cur.execute(sql, {...})` 跑的带命名占位符（`%(name)s`）的 SQL，psycopg3 都会扫描 `%X` 当占位符 —— 字面量 `%localhost%` 会被读成 `%l`（非法占位符），psycopg3 抛 `ProgrammingError: only '%s', '%b', '%t' are allowed as placeholders`，故 LIKE 里的字面 `%` 必须写成 `%%`（连注释里都不能出现裸 `%`）。这条对**声明式 SQL 工具（`config.sql_tools`）**和**任何 Python 插件自带的 SQL** 都适用；host 侧 `sql_tools.py` 的占位符校验在注册期就会拦下未声明的占位符。
 
 3. **`statement_timeout` 在建连时设置**，不是每次查询时设。`db.init_pool` 把 `options=f"-c statement_timeout={ms}"` 传给 `psycopg.conninfo.make_conninfo`。之前的设计是每次调用都 `cur.execute("SET ...")`，但这种方式在某些 Redshift WLM 队列下不稳定；不要恢复回去。
 
@@ -207,19 +209,20 @@ plugins/complex/ (独立可安装包 redshift-mcp-complex，SQL 由插件自有 
 
 **插件配置内聚原则**：Python 插件的私有配置**内聚在插件内部**，host `config.yaml` **不承载**插件私有配置（不存在 `plugins.config` 透传、`PluginContext` 没有 `get_plugin_config`）。`config.plugins` 只有加载开关（`enabled` / `disabled`）。
 
-插件如需 gitignored 的外部配置（如业务 SQL、敏感参数），**自带一个 `config.yaml`（结构与 host 同构）并自行加载**，host 仍不参与。`complex` 是参考实现（见 `plugins/complex/.../_config.py`）：
+插件如需 gitignored 的外部配置（如业务 SQL、敏感参数），**自带一个 `config.yaml`（结构与 host 同构）并自行加载**，host 仍不参与。典型做法（一个插件的 `_config.py`）：
 
-- **解析优先级**：`env var（REDSHIFT_MCP_COMPLEX_CONFIG）> 插件包目录内的 config.yaml（Path(__file__).parent/config.yaml）`。默认路径按**插件包自身位置**命名空间隔离，**不复用 host 的 conf.d**（公用目录会导致插件间配置冲突）。
+- **解析优先级**：`env var（形如 REDSHIFT_MCP_<PLUGIN>_CONFIG）> 插件包目录内的 config.yaml（Path(__file__).parent/config.yaml）`。默认路径按**插件包自身位置**命名空间隔离，**不复用 host 的 conf.d**（公用目录会导致插件间配置冲突）。
 - **缺失即报错跳过、不静默兜底**：找不到配置时插件 `register()` 抛带期望路径 + 修复指引的中文错误，由 `load_plugins` 的 try/except 隔离、记日志、跳过本插件（不搞崩 server）。
 - **打包模型（git 与 wheel 互补）**：git 仓库只提交模板 `config.example.yaml` / `queries/*.example.sql`（真实 `config.yaml` / `*.sql` 被 `.gitignore` 排除）；生产 build 时 `[tool.hatch.build]` 用 `artifacts` 把**真实** config 强制纳入 wheel、`exclude` 剔除模板 —— `uv pip install` 后默认路径即命中，连 env var 都不必。改 SQL = 改插件自有 config.yaml（重打 wheel 或用 env var 指向新配置），不必动插件代码。
 
   注意：`artifacts`/`exclude` 必须放 `[tool.hatch.build]` 全局层，否则 `uv build` 先打 sdist 再从 sdist 出 wheel，仅 `targets.wheel` 配的 artifacts 会被绕过。
 
-### 机制一：Python 插件 —— 三个关键文件
+### 机制一：Python 插件 —— 契约与加载器
 
-- **`errors.py`** —— 只放 `DB_RUNTIME_ERRORS` 元组的零依赖叶子模块。插件要复用同一组「DB/运行时错误」分类，但不能 import `server.py`（会形成 server → plugin → 插件 → server 循环），所以提到这里；`server.py` 自己也从这里 import（`as _DB_RUNTIME_ERRORS`）。
-- **`plugin.py`** —— 定义 `PluginContext`（宿主→插件契约）和 `load_plugins(ctx, *, disabled)`。加载器用 `importlib.metadata.entry_points(group="redshift_mcp.plugins")` 发现插件，**不扫描目录、不碰 `sys.path`**；每个插件的 import / 取 register / 调 register 三步各自 try/except 隔离，坏插件只记日志跳过，绝不搞崩 server。
-- **`plugins/complex/`** —— 自带的参考 Demo 插件包（distribution 名 `redshift-mcp-complex`，import 包名 `redshift_mcp_complex`）。SQL 由插件**自有 `config.yaml`** 提供（`_config.py` 按 `env var > 包内约定路径` 解析，命名占位符 `%(event_date)s`/`%(limit)s`）；仓库只提交模板 `config.example.yaml` / `queries/error_api.example.sql`，真实配置 gitignored、由生产 build 打进 wheel（动了打包配置要 `unzip -l` 验证 wheel 含真实 config、不含模板）。
+- **`redshift_mcp_sdk`（workspace 成员 `sdk/`）** —— **插件契约层薄包**，定义 `PluginContext`（宿主→插件契约）、`GROUP` 常量、`errors`（`DB_RUNTIME_ERRORS` / `db_errors_as_client_error`）。零第三方依赖叶子（psycopg 为可选 extra）。**外部插件只依赖它**（`from redshift_mcp_sdk import PluginContext`），不引入 host 实现源码。
+- **`errors.py`** —— 从 `redshift_mcp_sdk.errors` **re-export** `DB_RUNTIME_ERRORS`（back-compat：`server.py` 仍 `as _DB_RUNTIME_ERRORS` import，且是**同一对象**，`is` 身份断言成立）。
+- **`plugin.py`** —— 从 `redshift_mcp_sdk` **re-export** `PluginContext` / `GROUP`（back-compat），并保留 host 运行时才用的 `load_plugins(ctx, *, disabled)` / `iter_installed_plugins`。加载器用 `importlib.metadata.entry_points(group="redshift_mcp.plugins")` 发现插件，**不扫描目录、不碰 `sys.path`**；每个插件的 import / 取 register / 调 register 三步各自 try/except 隔离，坏插件只记日志跳过，绝不搞崩 server。
+- **无 in-repo 插件**：host 仓不夹带任何插件包；插件都是外部独立仓（各自打包 wheel），装进同一 venv 后被 `load_plugins` 的 entry_points 发现。上面「插件自带 config.yaml + 打包模型（artifacts/exclude）」的做法由外部插件仓落地。
 
 ### 机制二：声明式 SQL 工具（`sql_tools.py`）
 
@@ -242,7 +245,7 @@ plugins/complex/ (独立可安装包 redshift-mcp-complex，SQL 由插件自有 
 <name> = "<import_pkg>:register"
 ```
 
-并暴露 `register(ctx: PluginContext) -> None`，在其中用 `@ctx.mcp.tool()` 注册工具、闭包捕获 `ctx` 拿共享资源。`PluginContext` 字段：`mcp` / `config` / `logger` / `sql_audit_logger` / `request_id_var` / `get_pool` / `aexecute` / `db_runtime_errors` / `plugin_name`，外加方法 `db_errors(operation="查询", *, logger=None)`。插件**首选** `await ctx.aexecute(sql, {bind...}, max_rows=..., source=f"plugin:{ctx.plugin_name}")` 跑只读查询（复用 host `db.aexecute` 的执行 / 计时 / 截断 / 审计，免去自管连接池；`get_pool` 留给需自管连接的特殊场景），并用 `async with ctx.db_errors(logger=log):` 把 DB 异常收成带 rid 的 `RuntimeError`（不吞编程错误）；**`db_errors` 的 `operation` 用默认中性标签即可、不放工具名 —— 客户端错误里的工具名由 FastMCP 的 `Error executing tool <name>:` 前缀自动提供**；`plugin_name` 是 host 在 `load_plugins` 里经 `dataclasses.replace` 注入的本插件 entry-point 名（插件用它做 `source` / `getChild`，**不要硬编码自名**）。**它是稳定的公开 API**：破坏性改字段会让已装插件失配，要升主版本并在 CHANGELOG 标注；新增字段 / 方法属兼容变更（升 minor）；插件应只读使用 ctx（`config` 等成员本身可变，但别改）。
+并暴露 `register(ctx: PluginContext) -> None`（`from redshift_mcp_sdk import PluginContext`），在其中用 `@ctx.mcp.tool()` 注册工具、闭包捕获 `ctx` 拿共享资源。`PluginContext` 字段：`mcp` / `config` / `logger` / `sql_audit_logger` / `request_id_var` / `get_pool` / `aexecute` / `db_runtime_errors` / `plugin_name`，外加方法 `db_errors(operation="查询", *, logger=None)`。插件**首选** `await ctx.aexecute(sql, {bind...}, max_rows=..., source=f"plugin:{ctx.plugin_name}")` 跑只读查询（复用 host `db.aexecute` 的执行 / 计时 / 截断 / 审计，免去自管连接池；`get_pool` 留给需自管连接的特殊场景），并用 `async with ctx.db_errors(logger=log):` 把 DB 异常收成带 rid 的 `RuntimeError`（不吞编程错误）；**`db_errors` 的 `operation` 用默认中性标签即可、不放工具名 —— 客户端错误里的工具名由 FastMCP 的 `Error executing tool <name>:` 前缀自动提供**；`plugin_name` 是 host 在 `load_plugins` 里经 `dataclasses.replace` 注入的本插件 entry-point 名（插件用它做 `source` / `getChild`，**不要硬编码自名**）。**它是稳定的公开 API**：破坏性改字段会让已装插件失配，要升主版本并在 CHANGELOG 标注；新增字段 / 方法属兼容变更（升 minor）；插件应只读使用 ctx（`config` 等成员本身可变，但别改）。
 
 ### 插件分发模型（零 host 改动）
 
@@ -250,7 +253,7 @@ plugins/complex/ (独立可安装包 redshift-mcp-complex，SQL 由插件自有 
 
 ### monorepo（uv workspace）
 
-根 `pyproject.toml` 的 `[tool.uv.workspace] members = ["plugins/*"]`（**通配**，新增 `plugins/foo/` 自动是成员、无需手写）把核心包与各插件包组织成 workspace。`[tool.uv.sources] redshift-mcp = { workspace = true }` 按**包名**匹配，一条即让所有成员对宿主的依赖走本地源（不必逐插件写）。开发期用 **`uv sync --all-packages`** 把所有成员一并 editable 装进同一 venv，使其 entry-point 在开发期生效 —— **在 repo 内新增一个自带插件无需改 root pyproject**（既不必列进 `dependency-groups.dev`，也不必加 sources 条目）。`testpaths = ["tests", "plugins/*/tests"]` 同样通配纳入各插件自带测试。生产态 `uv build` 各包、`uv pip install` 进同一 venv 即可。
+根 `pyproject.toml` 的 `[tool.uv.workspace] members = ["sdk"]` —— **SDK 是唯一 workspace 成员**（host 仓不含插件）。`[tool.uv.sources] redshift-mcp-sdk = { workspace = true }` 让 host 对契约层的依赖走本地源。开发期用 **`uv sync --all-packages`** 把 host + sdk 一并 editable 装进同一 venv。外部插件不在本 workspace 里：各自 `uv build` 后 `uv pip install` 进同一 venv，靠 entry_points 自动发现（依赖解析在插件仓侧用 `[tool.uv.sources]` git URL 或私有 index 拉 `redshift-mcp-sdk`）。
 
 ### 关键约束 / 易踩的坑
 
@@ -263,7 +266,7 @@ plugins/complex/ (独立可安装包 redshift-mcp-complex，SQL 由插件自有 
 
 ## 测试有意全部离线
 
-`tests/` 下每一条测试要么调纯函数、要么校验 pydantic 模型、要么用 `starlette.testclient` 验 Bearer 中间件、要么用 `dictConfig` + 临时文件验日志管线、要么 monkeypatch `entry_points` 验插件加载器（`tests/test_plugin_loader.py`）。**没有一条**会 import 真 DB。SQL 模板字符串校验和 `query_error_api_by_date` 的日期校验测试已随插件迁到 `plugins/complex/tests/`（后者构造一个 `PluginContext` 取出工具函数，靠未初始化的 `get_pool` 抛 RuntimeError 来验证合法日期能流转过 `strptime`）；这两个文件经根 `pyproject.toml` 的 `testpaths` 纳入 `uv run pytest`。
+`tests/` 下每一条测试要么调纯函数、要么校验 pydantic 模型、要么用 `starlette.testclient` 验 Bearer 中间件、要么用 `dictConfig` + 临时文件验日志管线、要么 monkeypatch `entry_points` 验插件加载器（`tests/test_plugin_loader.py`，用伪造 `EntryPoint`、**不需真装任何插件**）。**没有一条**会 import 真 DB。插件自身的测试（工具日期校验 / SQL 模板 / 配置解析）随插件走各自的外部仓，不在 host 仓。
 
 `tests/test_logging.py` 有个 autouse fixture 在测试之间做 3 件事（**保留它，缺一不可**）：
 

@@ -5,7 +5,7 @@ requires-python = ">=3.10"
 [manifest]
 members = [
     "redshift-mcp",
-    "redshift-mcp-complex",
+    "redshift-mcp-sdk",
 ]
 
 [[package]]
@@ -842,13 +842,15 @@ wheels = [
 
 [[package]]
 name = "redshift-mcp"
-version = "0.3.5"
+version = "0.3.6"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
+    { name = "packaging" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pydantic" },
     { name = "pyyaml" },
+    { name = "redshift-mcp-sdk" },
     { name = "sqlglot" },
     { name = "starlette" },
     { name = "tzdata" },
@@ -864,9 +866,11 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "mcp", extras = ["cli"], specifier = ">=1.27.2" },
+    { name = "packaging", specifier = ">=21" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.3.4" },
     { name = "pydantic", specifier = ">=2.6.0" },
     { name = "pyyaml", specifier = ">=6.0.1" },
+    { name = "redshift-mcp-sdk", editable = "sdk" },
     { name = "sqlglot", specifier = ">=30.11.0,<31" },
     { name = "starlette", specifier = ">=1.3.1" },
     { name = "tzdata", specifier = ">=2024.1" },
@@ -880,19 +884,18 @@ dev = [
 ]
 
 [[package]]
-name = "redshift-mcp-complex"
-version = "0.3.5"
-source = { editable = "plugins/complex" }
-dependencies = [
-    { name = "pyyaml" },
-    { name = "redshift-mcp" },
+name = "redshift-mcp-sdk"
+version = "0.3.6"
+source = { editable = "sdk" }
+
+[package.optional-dependencies]
+psycopg = [
+    { name = "psycopg" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "pyyaml", specifier = ">=6" },
-    { name = "redshift-mcp", editable = "." },
-]
+requires-dist = [{ name = "psycopg", marker = "extra == 'psycopg'", specifier = ">=3.3.4" }]
+provides-extras = ["psycopg"]
 
 [[package]]
 name = "referencing"

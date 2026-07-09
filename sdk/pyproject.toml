@@ -1,0 +1,23 @@
+[project]
+name = "redshift-mcp-sdk"
+version = "0.3.6"
+description = "redshift-mcp 插件契约层 SDK：PluginContext + errors（供外部插件依赖，不含 host 实现源码）"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+# 薄契约包，运行时零第三方依赖。psycopg 见 optional-dependencies。
+dependencies = []
+
+[project.optional-dependencies]
+# DB_RUNTIME_ERRORS 想含 psycopg.Error 时装它；未装时 errors 守卫式降级（见 errors.py），
+# 生产运行在 host venv 里 psycopg 必然存在，语义完整。插件隔离 dev venv 可按需 [psycopg]。
+psycopg = ["psycopg>=3.3.4"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/redshift_mcp_sdk"]
+
+# 注：对本包的 workspace source 映射集中在根 pyproject 的 [tool.uv.sources]（uv 惯例）。

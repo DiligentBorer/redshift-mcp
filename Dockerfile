@@ -13,7 +13,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 WORKDIR /src
 COPY . /src
-# --all-packages:同时产出 redshift_mcp 与 redshift_mcp_complex 两个 wheel
+# --all-packages:产出 redshift_mcp(host) 与 redshift_mcp_sdk(契约层) 两个 wheel
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv build --all-packages -o /dist
 
@@ -25,25 +25,23 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # ---------- runtime ----------
 FROM python:3.13-slim AS runtime
-# 默认 0 = 公共镜像只装主包;私有线用 --build-arg INSTALL_COMPLEX=1 把 complex 一并装入。
-# complex 含 gitignored 业务 SQL,作为公共镜像不内置(与 DEPLOY.md「按需安装插件」一致)。
-ARG INSTALL_COMPLEX=0
+# 镜像只装 host(通用服务器 + 插件框架),不夹带任何插件。
+# 业务插件都是外部独立仓:在其仓构建 wheel,再以本镜像为基础 uv pip install 进 /app/.venv 即可
+# （靠 entry_points 自动发现,无需改 host 配置）。
 # 非 root 运行,贴合最小权限原则
 RUN useradd -r -u 10001 -m -d /app appuser
 WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 COPY --from=builder /dist /tmp/dist
 # 在干净 venv 里装 wheel(非 editable),装完即删 uv 与 wheel,保持镜像精简无构建残留。
-# glob redshift_mcp-*.whl 只匹配主包(其后紧跟 -),不会误匹配 redshift_mcp_complex-*。
+# glob redshift_mcp-*.whl 只匹配主包(其后紧跟 -),不会误匹配 redshift_mcp_sdk-*。
+# --find-links /tmp/dist:host 声明 redshift-mcp-sdk 依赖,而该契约包只存在于本地 dist、未发布 PyPI;
+# 把 dist 挂为额外查找源,sdk wheel 从本地解析,其余依赖(mcp/starlette/psycopg…)仍走 PyPI。
 RUN uv venv /app/.venv \
-    && VIRTUAL_ENV=/app/.venv uv pip install /tmp/dist/redshift_mcp-*.whl \
-    && if [ "$INSTALL_COMPLEX" = "1" ]; then \
-         VIRTUAL_ENV=/app/.venv uv pip install /tmp/dist/redshift_mcp_complex-*.whl; \
-       fi \
+    && VIRTUAL_ENV=/app/.venv uv pip install --find-links /tmp/dist /tmp/dist/redshift_mcp-*.whl \
     && rm -rf /tmp/dist /bin/uv
 ENV PATH="/app/.venv/bin:$PATH" \
-    REDSHIFT_MCP_CONFIG=/etc/redshift-mcp/config.yaml \
-    REDSHIFT_MCP_COMPLEX_CONFIG=/etc/redshift-mcp/plugins/complex/config.yaml
+    REDSHIFT_MCP_CONFIG=/etc/redshift-mcp/config.yaml
 # 日志目录;真实 config.yaml 等运行时以 volume 挂进 /etc/redshift-mcp,镜像内不含任何密钥
 RUN mkdir -p /app/logs && chown -R appuser:appuser /app
 USER appuser

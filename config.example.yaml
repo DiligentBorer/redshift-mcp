@@ -34,10 +34,10 @@ plugins:
   # 装进与本 server 同一个 venv 后，启动时自动被发现并注册工具 —— 没有「插件目录」。
   enabled: true                 # false => 整体跳过插件加载
   # 已安装但想临时不启用的插件名列表（按 entry-point name 匹配；用 `redshift-mcp --list-plugins` 查看名字）。
-  # 例: disabled: ["complex"]
+  # 例: disabled: ["some_plugin"]
   disabled: []
-  # 注：插件的私有配置内聚在各插件内部，本 host 配置不承载（例如 complex 插件的 SQL
-  # 在其包内的 queries/error_api.example.sql）。这里只有「加载开关」，没有 plugins.config。
+  # 注：插件的私有配置内聚在各插件内部，本 host 配置不承载（例如某业务插件的 SQL
+  # 在其包内的 config.yaml / queries/）。这里只有「加载开关」，没有 plugins.config。
 
 logging:
   level: INFO                   # DEBUG | INFO | WARNING | ERROR | CRITICAL
