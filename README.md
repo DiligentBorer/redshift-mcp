@@ -164,6 +164,13 @@ services:
 
 `PluginContext` 由薄契约层 SDK `redshift-mcp-sdk`（`from redshift_mcp_sdk import PluginContext`）提供，是稳定的公开契约——**外部插件只依赖它、不引入 host 实现源码**（host 内 `redshift_mcp.plugin` 亦 re-export 同一对象作 back-compat）。它提供 `mcp` / `config` / `logger` / `sql_audit_logger` / `request_id_var` / `get_pool` / `aexecute` / `db_runtime_errors` / `plugin_name`，外加方法 `db_errors(operation="查询", *, logger=None)`。`aexecute`（= host 的 `db.aexecute`）是插件执行只读查询的**首选入口**；`get_pool` 保留给需要自管连接的特殊场景；`plugin_name` 是本插件的 entry-point 名（用于 `source` / 子 logger，避免硬编码自名）。`db_errors` 的 `operation` 是面向客户端/日志的「什么失败了」标签，默认中性的「查询」即可——**不必放工具名**：客户端错误里的工具名由 FastMCP 的 `Error executing tool <name>:` 前缀自动提供。
 
+> **参考实现（demo 插件）**：[`redshift-mcp-pldemo`](https://github.com/DiligentBorer/redshift-mcp-pldemo)
+> 是一个**完整、可运行**的公开示例插件，演示上述全部约定 —— 独立包、entry-point 注册
+> （`pldemo = "redshift_mcp_pldemo:register"`）、`register(ctx)` 入口、只依赖 `redshift-mcp-sdk`
+> 而不 import host 源码、以及**插件私有配置内聚**（自带 `config.yaml` + `queries/*.sql`、随 wheel 分发）。
+> 它对外提供工具 `query_event_api_by_date(date)`（按日期返回 IP 维度的 API 命中统计）。
+> 想动手写自己的插件时，可直接把它当骨架 clone 下来改。
+
 ### 安装与启用
 
 ```bash
